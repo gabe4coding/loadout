@@ -77,7 +77,7 @@ const TASK_CHECK = [
 ].join('\n')
 
 // What a person reads when a later prompt starts a new task.
-const NEW_TASK = 'loadout: this prompt starts a new task. A new session or /clear gives it its own loadout and a smaller context.'
+const NEW_TASK = 'This prompt starts a new task. A new session or /clear gives it its own loadout and a smaller context.'
 
 const EFFORT = [
   'You choose the reasoning effort an AI coding agent needs for its newest prompt.',
@@ -168,9 +168,11 @@ export const register: Register = (on, options) => {
   const defaults: Switches = { effort: options.effortPerPrompt === true, model: options.modelForSession === true }
 
   on('session.start', async ($, e, next) => {
-    // A new session (also after /clear) starts with no effort history.
+    // A new session starts with no effort history. /clear does not fire this event.
     picking = null
     last = null
+    // The typeahead is built before this hook runs, so commands/loadout.md lists
+    // /loadout from the first keystroke; this call adds the bare name.
     await $.command.register({
       name: 'loadout',
       description: 'Show the loadout of this session. Also: list, pick, keep <name>, unkeep <name>, off, on, effort on|off, model on|off',
@@ -288,7 +290,7 @@ export const register: Register = (on, options) => {
     return { text }
   })
 
-  on('command.run', { command: 'loadout' }, async ($, e) => {
+  on('command.run', { command: /^(loadout:)?loadout$/ }, async ($, e) => {
     const [word = '', ...rest] = e.args.trim().split(/\s+/)
     if (word === 'off' || word === 'on') {
       await update($, isOff, () => word === 'off')
@@ -635,7 +637,7 @@ async function effortFor($: EngineInterface, isOn: boolean): Promise<Effort | nu
   const picked = pending === null ? null : await pending
   if (picked === null || picked === state.level) return state.level
   await update($, effort, now => ({ ...now, level: picked }))
-  $.ui.status(`loadout: effort ${picked}`)
+  $.ui.status(`effort ${picked}`)
   return picked
 }
 
@@ -683,7 +685,7 @@ async function recall($: EngineInterface, file: string, text: string, earlier: s
   if (isNew) $.ui.toast(NEW_TASK, { timeoutMs: 10000 })
   if (picked.length > 0) {
     await update($, surfaced, list => [...list, ...picked.map(offer => offer.group)])
-    $.ui.status(`loadout: pointed to ${picked.map(offer => offer.group).join(', ')}`)
+    $.ui.status(`pointed to ${picked.map(offer => offer.group).join(', ')}`)
   }
   return picked
 }
@@ -757,7 +759,7 @@ async function decide($: EngineInterface, file: string, kind: Kind, listing: Lis
   }
   await writeChoice($, kind, choice)
   const [t, s] = [await read($, tools), await read($, skills)]
-  $.ui.status(`loadout: hid ${t?.hidden.length ?? 0} tool groups, ${s?.hidden.length ?? 0} skills`)
+  $.ui.status(`hid ${t?.hidden.length ?? 0} tool groups, ${s?.hidden.length ?? 0} skills`)
   return choice
 }
 
