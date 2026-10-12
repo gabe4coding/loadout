@@ -77,7 +77,7 @@ const TASK_CHECK = [
 ].join('\n')
 
 // What a person reads when a later prompt starts a new task.
-const NEW_TASK = 'loadout: this prompt starts a new task. A new session or /clear gives it its own loadout and a smaller context.'
+const NEW_TASK = 'This prompt starts a new task. A new session or /clear gives it its own loadout and a smaller context.'
 
 const EFFORT = [
   'You choose the reasoning effort an AI coding agent needs for its newest prompt.',
@@ -629,7 +629,7 @@ async function effortFor($: EngineInterface, isOn: boolean): Promise<Effort | nu
   const picked = pending === null ? null : await pending
   if (picked === null || picked === state.level) return state.level
   await update($, effort, now => ({ ...now, level: picked }))
-  $.ui.status(`loadout: effort ${picked}`)
+  $.ui.status(`effort ${picked}`)
   return picked
 }
 
@@ -679,7 +679,7 @@ async function recall($: EngineInterface, file: string, text: string, earlier: s
   if (isNew) $.ui.toast(NEW_TASK, { timeoutMs: 10000 })
   if (picked.length > 0) {
     await update($, surfaced, list => [...list, ...picked.map(offer => offer.group)])
-    $.ui.status(`loadout: pointed to ${picked.map(offer => offer.group).join(', ')}`)
+    $.ui.status(`pointed to ${picked.map(offer => offer.group).join(', ')}`)
   }
   return picked
 }
@@ -753,7 +753,7 @@ async function decide($: EngineInterface, kind: Kind, listing: Listing): Promise
   }
   await writeChoice($, kind, choice)
   const [t, s] = [await read($, tools), await read($, skills)]
-  $.ui.status(`loadout: hid ${t?.hidden.length ?? 0} tool groups, ${s?.hidden.length ?? 0} skills`)
+  $.ui.status(`hid ${t?.hidden.length ?? 0} tool groups, ${s?.hidden.length ?? 0} skills`)
   return choice
 }
 
