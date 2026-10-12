@@ -28,6 +28,13 @@
       "default": false,
       "required": false
     },
+    "modelForSession": {
+      "type": "boolean",
+      "title": "Model for the session",
+      "description": "If true, the classifier picks the model from your first prompt, and the plugin uses it for the whole session. The plugin only changes to a smaller model of the same family (Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5).",
+      "default": false,
+      "required": false
+    },
     "traceFile": {
       "type": "string",
       "title": "Trace file",

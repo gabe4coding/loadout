@@ -157,6 +157,26 @@ three prompts.
   also loses the cache. After these, the plugin does not do this check.
 - `/loadout` shows the effort of the newest prompt.
 
+## Model for the session
+
+The plugin can suggest a smaller model for a session with a small task. To turn this on, set the option
+`modelForSession` to `true`. You can use it together with `effortPerPrompt`.
+
+The classifier reads your first prompt and picks a model. If that model is smaller than the model of the session,
+Claude Code asks you before the first request. If you approve, the plugin sends all main requests of the session to
+that model. Later prompts can change the effort only.
+
+- The plugin only goes down in this order: Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5. On other models, and on a
+  model with a larger context (for example `[1m]`), it does not ask.
+- If you close the question, or no one can answer it (a `-p` run), the session keeps its model.
+- Subagents keep their own model. A subagent that uses the model of the session runs on the model of the session,
+  not on the smaller model.
+- If you change the model with `/model` later, or run `/loadout off`, the plugin stops changing the model for the
+  rest of the session. This also occurs when Claude Code changes the model itself (a fallback).
+- The plugin cannot change the model of the session itself. The status line, `/model` and the system prompt still
+  show the model of the session. The footer shows the model that answers, for example `sonnet-5-5 (loadout)`.
+  `/loadout` shows it too.
+
 ## Cost
 
 The classifier runs on Haiku with low effort.
@@ -167,6 +187,7 @@ The classifier runs on Haiku with low effort.
 | A server connects after the first prompt | One call for its tool group | 10 seconds |
 | Each later prompt | One call. With `newTaskNote` off, only while hidden items are left to name. | 5 seconds |
 | Each prompt, with `effortPerPrompt` on | One more call, at the same time as the other calls | 5 seconds |
+| First prompt, with `modelForSession` on | One more call, before the question to you | 5 seconds |
 
 While hidden items are left to name, a later prompt waits for its call. Otherwise the call runs in the background.
 If the call fails or reaches its time limit, the prompt continues with no note and no toast.

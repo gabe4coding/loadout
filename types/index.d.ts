@@ -8,6 +8,12 @@ export type Offer = { kind: 'tools' | 'skills'; group: string; row: string }
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
+export type ModelTier = 'haiku' | 'sonnet' | 'opus' | 'fable'
+
+// The model change the person approved at the first prompt: the main requests
+// on the session's model `from` go to `to`.
+export type Route = { from: string; to: string }
+
 // The effort the plugin sets on the main requests. `level` is the latest pick,
 // null before the first. `isFrozen` is true once a change lost the cache: the
 // effort then stays for the rest of the session.
@@ -33,6 +39,7 @@ declare module 'claude-code' {
       // and the effort pick.
       recent: string[]
       effort: EffortState
+      route: Route | null
       // The alwaysKeep names as the first prompt found them. A server that
       // connects later in the session gets the same names.
       pinned: string[]

@@ -1,12 +1,14 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, ToolInfo, TurnStepResult } from 'claude-code'
 
-import type { Choice, Effort, Offer, ServerFact, SkillFact } from '../types'
+import type { Choice, Effort, Offer, Route, ServerFact, SkillFact } from '../types'
 import {
   flipKeep,
   capEffort,
   isNewTask,
   parseEffort,
+  parseModel,
+  routeModel,
   takesTurnEffort,
   groupsOf,
   isAlwaysKept,
@@ -39,6 +41,7 @@ const offers = atom({ plugin: 'loadout', key: 'offers' } as const, [])
 const surfaced = atom({ plugin: 'loadout', key: 'surfaced' } as const, [])
 const recent = atom({ plugin: 'loadout', key: 'recent' } as const, [])
 const effort = atom({ plugin: 'loadout', key: 'effort' } as const, { level: null, isFrozen: false })
+const route = atom({ plugin: 'loadout', key: 'route' } as const, null)
 const pinned = atom({ plugin: 'loadout', key: 'pinned' } as const, [])
 const marks = atom({ plugin: 'loadout', key: 'marks' } as const, null)
 const skillNames = atom({ plugin: 'loadout', key: 'skillNames' } as const, [])
@@ -84,6 +87,16 @@ const EFFORT = [
   'xhigh: a hard bug, a design decision or a long task with many steps.',
   'max: only when correctness matters far more than cost.',
   'If unsure, reply medium.',
+].join('\n')
+
+const MODEL = [
+  'You choose the model an AI coding agent needs for a new session, from its first prompt.',
+  'Reply with one word: haiku, sonnet, opus or fable.',
+  'haiku: a short answer, a lookup or a small change in one file.',
+  'sonnet: a normal coding task: a feature, a fix or a review in a few files.',
+  'opus: a hard task: a large change across many files, a hard bug or a design decision.',
+  'fable: only for the hardest tasks, where correctness matters far more than cost.',
+  'If unsure, reply sonnet.',
 ].join('\n')
 
 // A request that keeps less than this part of the cache of the request before
@@ -144,6 +157,7 @@ export const register: Register = (on, options) => {
   const alwaysKeep = typeof options.alwaysKeep === 'string' ? parseKeep(options.alwaysKeep) : []
   const checksTask = options.newTaskNote !== false
   const setsEffort = options.effortPerPrompt === true
+  const setsModel = options.modelForSession === true
 
   on('session.start', async ($, e, next) => {
     // A new session (also after /clear) starts with no effort history.
@@ -175,7 +189,11 @@ export const register: Register = (on, options) => {
     const window = checksTask || setsEffort ? await remember($, text) : []
     if (await read($, isOff)) return next(e)
     if (setsEffort && !(await read($, effort)).isFrozen) picking = pickEffort($, file, text, window)
-    if (isFirst) return next(e)
+    if (isFirst) {
+      // The person answers before the first request, which then goes to the model they chose.
+      if (setsModel) await chooseModel($, file, text).catch(() => undefined)
+      return next(e)
+    }
     const earlier = checksTask ? window : []
     const named = new Set(await read($, surfaced))
     const open = (await read($, offers)).filter(offer => !named.has(offer.group))
@@ -189,14 +207,18 @@ export const register: Register = (on, options) => {
     return next({ ...e, context: [...(e.context ?? []), ...recallNotes(picked)] })
   }).catch(($, e, next) => next(e))
 
-  // The main requests of a turn get the effort picked for its prompt, at most
-  // the session's own effort. Only on a model that takes the effort in a
+  // The main requests of the session go to the model picked for the first
+  // prompt. Those of a turn get the effort picked for its prompt, at most the
+  // session's own effort, and only on a model that takes the effort in a
   // message: there a change keeps the cache.
   on('turn.step', async function* ($, e, next) {
-    if (!setsEffort || e.agentId !== undefined || e.effort === undefined || !takesTurnEffort(e.model)) return yield* next(e)
+    if (e.agentId !== undefined || (!setsModel && !setsEffort)) return yield* next(e)
+    const model = setsModel ? await modelFor($, e.model).catch(() => null) : null
+    const base = model === null ? e : { ...e, model }
+    if (!setsEffort || e.effort === undefined || !takesTurnEffort(base.model)) return yield* next(base)
     const level = await effortFor($).catch(() => null)
     const sent = (level === null ? null : capEffort(level, e.effort)) ?? e.effort
-    const result = yield* next(sent === e.effort ? e : { ...e, effort: sent })
+    const result = yield* next(sent === e.effort ? base : { ...base, effort: sent })
     await watchCache($, file, String(sent), result).catch(() => undefined)
     return result
   })
@@ -286,6 +308,21 @@ export const register: Register = (on, options) => {
     const known = await readFacts($)
     await update($, facts, () => known)
     return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // A model the person sets with /model (or a fallback of the engine) stays
+  // for the rest of the session.
+  on('classic.PostModelSwitch', async ($, e, next) => {
+    await endRoute($)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // The status line and /model still show the session's model: the footer
+  // names the model that answers.
+  on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    const now = await read($, route)
+    if (now === null) return next(e)
+    return next({ ...e, props: { ...e.props, modes: [...e.props.modes, `${now.to.replace(/^claude-/, '')} (loadout)`] } })
   }).catch(($, e, next) => next(e))
 
   // The always-keep picker: a section for the tool servers and one for the
@@ -485,20 +522,62 @@ async function remember($: EngineInterface, text: string): Promise<string[]> {
   return earlier
 }
 
+// Asks the classifier for one word of `parse` about a prompt of the person.
+// Null on any failure.
+async function pickWord<T>(
+  $: EngineInterface,
+  system: string,
+  text: string,
+  earlier: string[],
+  parse: (reply: string) => T | null,
+): Promise<T | null> {
+  const reply = await $.model
+    .complete({ model: 'haiku', system, prompt: promptBlock(text, earlier), maxTokens: 20, effort: 'low', timeoutMs: 5000 })
+    .catch(() => null)
+  return reply?.isAnswered ? parse(reply.text) : null
+}
+
+// Asks the classifier for the model of the session, from its first prompt. A
+// smaller model goes to the person, who must approve it. On any failure, or a
+// dismissed question, the session keeps its model.
+async function chooseModel($: EngineInterface, file: string, text: string): Promise<void> {
+  const [picked, session] = await Promise.all([pickWord($, MODEL, text, [], parseModel), $.session.model()])
+  const to = picked === null ? null : routeModel(picked, session)
+  trace($, file, { event: 'model_pick', picked, session, to })
+  if (to === null) return
+  const use = `Use ${to}`
+  const answer = await $.ui.ask(
+    `loadout: ${to} looks enough for this task. Use it instead of ${session} for this session? The status line and /model still show ${session}.`,
+    { header: 'Model', options: [use, `Keep ${session}`] },
+  )
+  const isUsed = answer === use
+  trace($, file, { event: 'model_route', from: session, to, isUsed })
+  if (!isUsed) return
+  await update($, route, () => ({ from: session, to }))
+  $.ui.invalidate('ui.render')
+}
+
+// The model for a main request: the one the person approved. A step on
+// another model (a fallback of the engine) keeps it. /loadout off ends the
+// change for the rest of the session.
+async function modelFor($: EngineInterface, model: string): Promise<string | null> {
+  const [now, off] = await Promise.all([read($, route), read($, isOff)])
+  if (now === null || model !== now.from) return null
+  if (!off) return now.to
+  await endRoute($)
+  return null
+}
+
+async function endRoute($: EngineInterface): Promise<void> {
+  if ((await read($, route)) === null) return
+  await update($, route, () => null)
+  $.ui.invalidate('ui.render')
+}
+
 // Asks the classifier for the effort of a prompt of the person. Null on any
 // failure: the request then keeps the effort it has.
 async function pickEffort($: EngineInterface, file: string, text: string, earlier: string[]): Promise<Effort | null> {
-  const reply = await $.model
-    .complete({
-      model: 'haiku',
-      system: EFFORT,
-      prompt: promptBlock(text, earlier),
-      maxTokens: 20,
-      effort: 'low',
-      timeoutMs: 5000,
-    })
-    .catch(() => null)
-  const picked = reply?.isAnswered ? parseEffort(reply.text) : null
+  const picked = await pickWord($, EFFORT, text, earlier, parseEffort)
   trace($, file, { event: 'effort_pick', picked })
   return picked
 }
@@ -679,7 +758,7 @@ async function summary($: EngineInterface): Promise<string> {
   if (await read($, isOff)) return 'loadout is off for this session.'
   const [t, s] = [await read($, tools), await read($, skills)]
   if (t === null && s === null) {
-    return ['loadout has not picked a loadout for this session yet. Send a prompt first.', ...effortLine(await read($, effort))].join('\n')
+    return ['loadout has not picked a loadout for this session yet. Send a prompt first.', ...modelLine(await read($, route)), ...effortLine(await read($, effort))].join('\n')
   }
   // No tool decision: the session has no ToolSearch or no MCP tools.
   const toolLines = t === null
@@ -691,8 +770,13 @@ async function summary($: EngineInterface): Promise<string> {
     `Skills kept: ${s?.kept.join(', ') || 'none'}`,
     `Skills hidden: ${s?.hidden.length ?? 0}`,
     `Named to later prompts: ${(await read($, surfaced)).join(', ') || 'none'}`,
+    ...modelLine(await read($, route)),
     ...effortLine(await read($, effort)),
   ].join('\n')
+}
+
+function modelLine(state: Route | null): string[] {
+  return state === null ? [] : [`Model: ${state.to} (the session's model: ${state.from})`]
 }
 
 function effortLine(state: { level: string | null; isFrozen: boolean }): string[] {

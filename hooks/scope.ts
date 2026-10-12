@@ -1,7 +1,7 @@
 // Pure text work: parse the listings the engine injects, group their entries,
 // and rebuild them with only the groups the classifier kept.
 
-import type { Effort, ServerFact, SkillFact } from '../types'
+import type { Effort, ModelTier, ServerFact, SkillFact } from '../types'
 
 // A deferred tool line is one bare name; an MCP tool is mcp__<server>__<tool>.
 const TOOL_LINE = /^[A-Za-z0-9_.:-]+$/
@@ -214,12 +214,40 @@ export function isNewTask(reply: string): boolean {
 }
 
 const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
-const EFFORT_WORD = /(?<![a-z])(low|medium|high|xhigh|max)(?![a-z])/gi
+// From the smallest model to the largest.
+const MODEL_ID: Record<ModelTier, string> = {
+  haiku: 'claude-haiku-5-5',
+  sonnet: 'claude-sonnet-5-5',
+  opus: 'claude-opus-5-5',
+  fable: 'claude-fable-5-1',
+}
+const MODELS = Object.keys(MODEL_ID) as ModelTier[]
 
-// The effort level a reply names, or null when it names none or several.
-export function parseEffort(reply: string): Effort | null {
-  const named = new Set([...reply.matchAll(EFFORT_WORD)].map(match => match[1]?.toLowerCase() as Effort))
+const wordOf = (words: readonly string[]) => new RegExp(`(?<![a-z])(${words.join('|')})(?![a-z])`, 'gi')
+const EFFORT_WORD = wordOf(EFFORTS)
+const MODEL_WORD = wordOf(MODELS)
+
+// The one word that a reply names, or null when it names none or several.
+function oneWord<T extends string>(reply: string, pattern: RegExp): T | null {
+  const named = new Set([...reply.matchAll(pattern)].map(match => match[1]?.toLowerCase() as T))
   return named.size === 1 ? ([...named][0] ?? null) : null
+}
+
+export function parseEffort(reply: string): Effort | null {
+  return oneWord(reply, EFFORT_WORD)
+}
+
+export function parseModel(reply: string): ModelTier | null {
+  return oneWord(reply, MODEL_WORD)
+}
+
+// The model to send instead of the session's: the pick, when it is a smaller
+// model of the same family. Null keeps the session's model: a pick at or above
+// it, or a session model out of the family (also one with a larger context,
+// such as `[1m]`, that the smaller model may not have).
+export function routeModel(picked: ModelTier, session: string): string | null {
+  const ceiling = MODELS.findIndex(tier => MODEL_ID[tier] === session)
+  return MODELS.indexOf(picked) < ceiling ? MODEL_ID[picked] : null
 }
 
 // The lower of two levels: the plugin may lower the session's effort, never

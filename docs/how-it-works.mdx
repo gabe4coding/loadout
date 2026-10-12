@@ -74,6 +74,7 @@ The classifier sends these items to Haiku through the API client and login of Cl
 - On a later prompt, its first 4,000 characters and the rows of the items that are still hidden.
 - On a later prompt, the first 1,000 characters of your last three prompts, for the new-task check.
 - With `effortPerPrompt` on, each prompt that you send and your last three prompts, for the effort pick.
+- With `modelForSession` on, the first prompt, for the model pick.
 
 The plugin sends no file contents and no tool results. It stores nothing on disk, except the always-keep names
 from `/loadout keep` and the pane. Claude Code keeps them in the storage of the plugin. The other state lasts for the

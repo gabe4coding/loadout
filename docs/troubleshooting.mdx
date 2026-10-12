@@ -56,6 +56,8 @@ Add this entry to `~/.claude/settings.json`:
 | `recall` | The plugin checks a later prompt | `named`, `isNewTask` |
 | `effort_pick` | The classifier picks the effort of a prompt | `picked` |
 | `effort_change` | A main request goes out with an effort other than the request before it | `from`, `to`, `cacheRead` |
+| `model_pick` | The classifier picks the model of the session from the first prompt | `picked`, `session`, `to` |
+| `model_route` | You answer the question about the model | `from`, `to`, `isUsed` |
 | `effort_frozen` | A request after a change of effort lost most of the cache. The effort stays for the session. | `level`, `model` |
 
 If `isScoped` is `false`, the plugin kept the full listing. These are the causes:
@@ -76,4 +78,7 @@ The trace contains names and counts only, not the text of your prompts.
 - With `effortPerPrompt` on, the cache can expire before 5 minutes for other causes (for example, a change of the
   system prompt). If this occurs on the request where the effort changes, the plugin keeps that effort for the rest of
   the session.
+- With `modelForSession` on, Claude Code still plans the context and the reply length for the model of the session.
+  A smaller model can have lower limits, so a very long session can fail. If this occurs, run `/loadout off` or
+  `/model`. The plugin then keeps the model of the session.
 - The plugin uses the hooks module API of Claude Code. A new Claude Code release can change this API.
