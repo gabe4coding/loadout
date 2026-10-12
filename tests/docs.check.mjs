@@ -146,7 +146,12 @@ const tests = {
     const doc = path.join(dir, 'x.mdx')
     const long = `${Array(26).fill('word').join(' ')}.`
     fs.writeFileSync(doc, `---\ntitle: X\ndescription: Y\n---\n\n# Z\n\nIt's here; you should just look, e.g. now.\n\n${long}\n\n\`code; should\` is fine.\n`)
-    const found = docProblems(doc, dir).join('\n')
+    let found
+    try {
+      found = docProblems(doc, dir).join('\n')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
     for (const message of ['H1 must be', 'contraction', 'modal verb', 'filler word', 'semicolon', 'Latin', '26 words']) {
       assert.ok(found.includes(message), message)
     }

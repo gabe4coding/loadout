@@ -23,16 +23,27 @@ enforces; the others rely on discipline.
   prompt text.
 
 ## Tests and commits
-- Before every commit, run all three checks. `[test: CI runs all three]`
+- Before every commit, do the verification loop in this order. If a step changes code, start again at step 1.
+  1. `/simplify`: the built-in Claude Code skill. It cleans up the diff (reuse, simplification, efficiency) and
+     applies the fixes. Run it first, so the later steps see its edits too.
+  2. `/code-review`: the built-in Claude Code skill. It looks for correctness bugs in the diff. Fix each finding
+     that it confirms, or say in the commit why you keep the code.
+  3. The three checks below, and the type check when its rule below applies.
+  4. `/verify`: the built-in Claude Code skill. It drives the change end to end and observes the behaviour. Run it
+     after a plugin change (see [Plugin](#plugin)). Skip it when the diff touches only tests or docs: there is
+     nothing to drive. It reads the project recipe in `.claude/skills/verify/` (`SKILL.md` and `drive.mjs`): real
+     Claude Code with the plugin and the fake MCP servers. If the recipe fails or misses a step, fix it.
+- The three checks. `[test: CI runs all three]`
   - `claude plugin validate .`: the manifests, the module and the state contract, as the engine reads them.
   - `claude plugin test .`: the hooks against a fake host (`tests/*.test.ts`). Mock `model.complete` there: the
     test kit has no model.
   - `node tests/docs.check.mjs`: the doc rules below.
 - `node tests/smoke.e2e.mjs`: real `claude -p` with the plugin and two fake MCP servers, two prompts in one
-  session. It needs a login and costs API usage, so it is not one of the three checks and CI does not run it. Run it
-  after a change to `hooks/`, before a release, and after you raise the pinned Claude Code version. Its checks read
+  session. It needs a login and costs API usage, so it is not one of the three checks and CI does not run it. Run
+  it after a plugin change, before a release, and after you raise the pinned Claude Code version. Its checks read
   the trace file (`traceFile` option) and the fake servers' calls, never the words of the model: the transcript keeps
   a listing as Claude Code made it, not as the plugin answered it.
+- Start a real Claude Code session only through `tests/session.mjs`: the smoke test and `drive.mjs` share it.
 - Write a test for each behaviour change. A test that needs `ui.status` or `ui.invalidate` registers the `quiet`
   hooks in `tests/loadout.test.ts`: the kit has no implementation for them.
 - CI (`.github/workflows/test.yml`) pins the Claude Code version for `claude plugin test .`, and a weekly job runs
@@ -43,8 +54,8 @@ enforces; the others rely on discipline.
   `datadog`, `slack` and similar generic server names.
 
 ## Plugin
-- When anything under `hooks/`, `types/` or `.claude-plugin/plugin.json` changes, bump `version` in
-  `.claude-plugin/plugin.json`: Claude Code caches a plugin per version.
+- A plugin change is a change under `hooks/`, `types/` or to `.claude-plugin/plugin.json`. After a plugin change,
+  bump `version` in `.claude-plugin/plugin.json`: Claude Code caches a plugin per version.
   `[test: CI runs tests/version.check.mjs on each pull request]`
 
 ## Model-facing text

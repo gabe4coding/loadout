@@ -16,7 +16,30 @@ The full repo is the plugin. Claude Code loads the hooks module from `hooks/hook
 | `hooks/scope.ts` | Pure helpers: parse a listing, group its items, rebuild it with a note. |
 | `types/index.d.ts` | The state that the plugin keeps for a session. |
 | `tests/` | The tests of the hooks, the checks for docs and versions, and a smoke test with real Claude Code. |
+| `tests/session.mjs` | Starts one real Claude Code session with the plugin and the fake MCP servers. |
+| `.claude/skills/verify/` | The recipe that `/verify` reads: how to drive the plugin in real Claude Code. |
 | `docs/` | The user docs, and the banner and logo in `docs/assets/`. |
+
+## Verification loop
+
+Do these steps before each commit, in this order. If a step changes code, start again at step 1. The full rules
+are in `CODING_STANDARDS.md`.
+
+1. Run `/simplify`. This built-in skill cleans up the diff and applies the fixes.
+2. Run `/code-review`. This built-in skill looks for bugs in the diff. Fix each bug that it finds. If you do not
+   fix a finding, write the reason in the commit message.
+3. Run the three checks in [Checks](#checks).
+4. Run `/verify` after a change to `hooks/`, `types/` or `.claude-plugin/plugin.json`. This built-in skill drives
+   the change end to end in real Claude Code. It reads the recipe in `.claude/skills/verify/`. Skip this step when
+   the diff changes only tests or docs.
+
+To drive the plugin yourself, run `.claude/skills/verify/drive.mjs` with one or more prompts. Each prompt goes into
+one headless session after the reply to the prompt before it. The script prints the decisions of the plugin, the
+notes, the tool calls and the token use of each request:
+
+```bash
+node .claude/skills/verify/drive.mjs run 'List the open issues of project OPS.' '/loadout'
+```
 
 ## Checks
 
@@ -53,7 +76,7 @@ The smoke test runs real headless Claude Code with this plugin and two fake MCP 
 of the first prompt. The other server has weather tools, which the task does not need. The other tests replace
 Claude Code and the classifier with fakes. This test runs all the parts together.
 
-Run it after a change to `hooks/`, before a release, and after you increase the Claude Code version:
+Run it after a change to the plugin, before a release, and after you increase the Claude Code version:
 
 ```bash
 node tests/smoke.e2e.mjs
