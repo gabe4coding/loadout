@@ -310,11 +310,14 @@ export const register: Register = (on, options) => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
-  // A model the person sets with /model (or a fallback of the engine) stays
-  // for the rest of the session.
-  on('classic.PostModelSwitch', async ($, e, next) => {
-    await endRoute($)
-    return next(e)
+  // A model the person sets with /model stays for the rest of the session.
+  // The security module skips classic.PostModelSwitch for a user plugin, so
+  // the plugin watches the command, and modelFor each request.
+  on('command.run', { command: 'model' }, async ($, e, next) => {
+    const result = await next(e)
+    const now = await read($, route)
+    if (now !== null && (await $.session.model()) !== now.from) await endRoute($)
+    return result
   }).catch(($, e, next) => next(e))
 
   // The status line and /model still show the session's model: the footer
@@ -557,13 +560,13 @@ async function chooseModel($: EngineInterface, file: string, text: string): Prom
   $.ui.invalidate('ui.render')
 }
 
-// The model for a main request: the one the person approved. A step on
-// another model (a fallback of the engine) keeps it. /loadout off ends the
-// change for the rest of the session.
+// The model for a main request: the one the person approved. A request on
+// another model (a /model change, a fallback) or /loadout off ends the change
+// for the rest of the session.
 async function modelFor($: EngineInterface, model: string): Promise<string | null> {
   const [now, off] = await Promise.all([read($, route), read($, isOff)])
-  if (now === null || model !== now.from) return null
-  if (!off) return now.to
+  if (now === null) return null
+  if (model === now.from && !off) return now.to
   await endRoute($)
   return null
 }

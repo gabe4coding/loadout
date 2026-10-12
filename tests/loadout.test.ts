@@ -347,9 +347,9 @@ test('does not keep the effort when the cache was lost to a pause or a change of
 // The classifier picks `tier` for the model; the session runs `session`; the
 // person answers the model question with the option that starts with `pick`.
 // Returns the questions asked.
-function routed(on: On, tier: string, pick: 'Use' | 'Keep', session = 'claude-opus-5-5'): string[] {
+function routed(on: On, tier: string, pick: 'Use' | 'Keep', session: () => string = () => 'claude-opus-5-5'): string[] {
   const asked: string[] = []
-  on('session.model', () => ({ value: session }))
+  on('session.model', () => ({ value: session() }))
   picks(on, () => tier, 'choose the model')
   on('tool.call', ($, e, next) => {
     if (e.tool !== 'AskUserQuestion') return next(e)
@@ -381,7 +381,6 @@ test('sends the session to the model the person approved, until they change it',
   listed(on)
   const asked = routed(on, 'sonnet', 'Use')
   const draw = footer(on)
-  on('classic.PostModelSwitch', () => ({}) as never)
   const models = requests(on, undefined, e => e.model)
 
   await $.prompt.submit({ text: 'Add a test for the parser', wait: false, origin: COMPOSER } as never)
@@ -392,13 +391,32 @@ test('sends the session to the model the person approved, until they change it',
   expect((await $.command.run(run(''))).text).toContain('Model: claude-sonnet-5-5')
   expect(await draw($)).toEqual(['focus', 'sonnet-5-5 (loadout)'])
   await step($, 't3', { model: 'claude-fable-5-1' })
-  await $.classic.PostModelSwitch({ from_model: 'claude-opus-5-5', to_model: 'claude-fable-5-1', source: 'command' } as never)
   await step($, 't4', { model: 'claude-opus-5-5' })
   expect(await draw($)).toEqual(['focus'])
 
   expect(asked.length).toBe(1)
   expect(asked[0]).toContain('claude-sonnet-5-5')
   expect(models).toEqual(['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-fable-5-1', 'claude-opus-5-5'])
+})
+
+test('/model ends the model change at once', { options: { modelForSession: true } }, async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on)
+  let session = 'claude-opus-5-5'
+  routed(on, 'haiku', 'Use', () => session)
+  const draw = footer(on)
+  on('command.run', { command: 'model' }, ($, e) => {
+    session = 'claude-sonnet-5-5'
+    return { text: 'Set model to Sonnet 5.5' } as never
+  })
+
+  await $.prompt.submit({ text: 'What is 2+2?', wait: false, origin: COMPOSER } as never)
+  expect(await draw($)).toEqual(['focus', 'haiku-5-5 (loadout)'])
+  await $.command.run({ command: 'model', args: 'sonnet', origin: COMPOSER } as never)
+
+  expect(await draw($)).toEqual(['focus'])
+  expect((await $.command.run(run(''))).text).not.toContain('Model:')
 })
 
 test('/loadout off sends the next requests to the session model', { options: { modelForSession: true } }, async ($, on) => {
@@ -422,7 +440,7 @@ test('keeps the session model when the person says no, or the pick is not smalle
   on('prompt.submit', ($, e) => ({ text: e.text }))
   quiet(on)
   listed(on)
-  const asked = routed(on, 'haiku', 'Keep', 'claude-sonnet-5-5')
+  const asked = routed(on, 'haiku', 'Keep', () => 'claude-sonnet-5-5')
   const models = requests(on, undefined, e => e.model)
 
   await $.prompt.submit({ text: 'What does this function return?', wait: false, origin: COMPOSER } as never)
@@ -436,7 +454,7 @@ test('asks nothing when the picked model is not smaller than the session model',
   on('prompt.submit', ($, e) => ({ text: e.text }))
   quiet(on)
   listed(on)
-  const asked = routed(on, 'opus', 'Use', 'claude-sonnet-5-5')
+  const asked = routed(on, 'opus', 'Use', () => 'claude-sonnet-5-5')
 
   await $.prompt.submit({ text: 'Redesign the storage layer', wait: false, origin: COMPOSER } as never)
 
