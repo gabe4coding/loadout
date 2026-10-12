@@ -36,8 +36,10 @@ const SERVERS = {
     },
   },
 }
-const server = SERVERS[KIND]
-if (!server) throw new Error(`FAKE_KIND must be one of ${Object.keys(SERVERS).join(', ')}`)
+// FAKE_SERVERS names a module with other kinds, for the eval (evals/fixture.mjs).
+const kinds = process.env.FAKE_SERVERS ? (await import(process.env.FAKE_SERVERS)).SERVERS : SERVERS
+const server = kinds[KIND]
+if (!server) throw new Error(`FAKE_KIND must be one of ${Object.keys(kinds).join(', ')}`)
 
 const send = msg => process.stdout.write(`${JSON.stringify(msg)}\n`)
 

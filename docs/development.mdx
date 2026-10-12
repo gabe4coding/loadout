@@ -17,6 +17,7 @@ The full repo is the plugin. Claude Code loads the hooks module from `hooks/hook
 | `types/index.d.ts` | The state that the plugin keeps for a session. |
 | `tests/` | The tests of the hooks, the checks for docs and versions, and a smoke test with real Claude Code. |
 | `tests/session.mjs` | Starts one real Claude Code session with the plugin and the fake MCP servers. |
+| `evals/` | The impact eval: the tasks, the fixed setup of servers and skills, and the runner. |
 | `.claude/skills/verify/` | The recipe that `/verify` reads: how to drive the plugin in real Claude Code. |
 | `docs/` | The user docs, and the banner and logo in `docs/assets/`. |
 
@@ -100,6 +101,68 @@ instructions of all servers.
 - A failed run keeps its folder, with the transcript and the trace. The test prints the path. To keep the folder of a
   run that passes, add `--keep`.
 - CI does not run the smoke test, because CI has no login.
+
+## Impact eval
+
+The impact eval measures what the plugin changes in cost, speed and quality. It runs each task as a real headless
+Claude Code session, one time for each arm:
+
+| Arm | Plugin | Options |
+| --- | --- | --- |
+| `baseline` | Off | None |
+| `loadout` | On | The defaults: the plugin changes the listings only |
+| `effort` | On | `effortPerPrompt` |
+| `model` | On | `modelForSession`. The eval answers the model question with the smaller model. |
+| `all` | On | `effortPerPrompt` and `modelForSession` |
+
+To see the number of sessions before you spend money, run this command:
+
+```bash
+node evals/impact.mjs --dry-run
+```
+
+To run the full eval, run this command:
+
+```bash
+node evals/impact.mjs
+```
+
+The defaults are 8 tasks, 5 arms and 2 runs: 80 sessions on Sonnet with effort `high`. With the defaults, a run
+costs approximately $3 and takes approximately 5 minutes. Use these options to change the run:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--arms` | All five | The arms to run, separated by commas |
+| `--tasks` | All | The task ids of `evals/tasks.mjs`, separated by commas |
+| `--runs` | `2` | The sessions for each task and arm. Use more runs for smaller differences. |
+| `--jobs` | `4` | The sessions that run at the same time |
+| `--model`, `--effort` | `sonnet`, `high` | The model and the effort of each session |
+| `--env` | `fixed` | `fixed` or `real`, see below |
+| `--keep` | Off | Keep the folders of the sessions that pass |
+
+The eval writes `results.jsonl` and `report.md` to `evals/results/`, which git does not track. To write the report
+of a run folder again, run `node evals/impact.mjs --report <folder>`.
+
+### What the eval measures
+
+- Cost: the cost of the session, plus the classifier calls. The session cost does not include the classifier
+  calls, so the plugin writes their token use to its trace file.
+- Speed: the time from each prompt to its result. This time includes the classifier calls before the first request.
+- Quality: the checks of each task. The checks read the calls to the fake servers, the files and the answers.
+- The report compares each arm with the baseline for each task. Then it takes the geometric mean over the tasks.
+
+The first session that sends the system prompt and the tools writes them to the prompt cache. The next sessions
+read them for less money. Thus, before the measured runs, the eval runs one session for each arm.
+
+### Fixed setup or real setup
+
+The plugin saves more when the listings are longer. Thus the result depends on the setup of the session.
+
+- `--env fixed` uses a fixed setup: 12 fake MCP servers with approximately 80 tools, and 40 project skills. The
+  session does not load your user settings, plugins, skills or MCP servers. The policy settings of your organization
+  still apply. Use this setup to compare two versions of the plugin.
+- `--env real` also loads your own settings, plugins, skills and MCP servers. Use this setup to see the savings on
+  your machine. The eval turns off an installed copy of loadout in each arm.
 
 ## Type check
 

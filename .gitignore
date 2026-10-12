@@ -7,3 +7,4 @@ node_modules/
 
 # Worktrees that the Claude desktop app makes for its sessions.
 .claude/worktrees/
+evals/results/
