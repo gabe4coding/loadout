@@ -49,8 +49,8 @@ function choose($: EngineInterface, kind: Kind, listing: Listing): Promise<Choic
   return run
 }
 
-// The servers with a tool in the prompt's own list, not behind ToolSearch.
-// Their instructions always stay: Claude sees their tools.
+// The servers with a tool that a plugin keeps in the prompt's own list while
+// tool search is on. Their instructions always stay: Claude sees their tools.
 const front = new Set<string>()
 
 // One JSON line per decision when the traceFile option names a file. The
@@ -211,13 +211,19 @@ async function isSkipped($: EngineInterface): Promise<boolean> {
 // tool listing reuses the decision.
 async function trimmed($: EngineInterface, text: string): Promise<string> {
   if (await isSkipped($)) return text
-  const choice = (await read($, tools)) ?? (await choose($, 'tools', await mcpTools($)))
+  const choice = (await read($, tools)) ?? (await listedChoice($))
+  if (choice === null) return text
   return trimMcpInstructions(text, new Set(choice.hidden.filter(group => !front.has(group))))
 }
 
-async function mcpTools($: EngineInterface): Promise<Listing> {
-  const names = (await $.tool.list()).filter(info => info.mcp).map(info => info.name)
-  return parseTools(names.join('\n'))
+// Null without ToolSearch: then every MCP tool is in the prompt, Claude sees
+// them all, and no tool group is hidden. The engine still says isDeferred for
+// them, so ToolSearch is the one sign.
+async function listedChoice($: EngineInterface): Promise<Choice | null> {
+  const listed = await $.tool.list()
+  if (!listed.some(info => info.name === 'ToolSearch')) return null
+  const names = listed.filter(info => info.mcp).map(info => info.name)
+  return choose($, 'tools', parseTools(names.join('\n')))
 }
 
 // Classifies only the groups not seen before, so a later delta (an MCP server

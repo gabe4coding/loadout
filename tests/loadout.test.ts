@@ -32,6 +32,15 @@ const MCP = [
 
 const ENGINE = { kind: 'engine' } as const
 
+// The MCP instructions as an attachment: the blocks, with no header.
+const BLOCKS = MCP.slice(MCP.indexOf('## datadog'))
+
+// The MCP tools as $.tool.list() gives them.
+const LISTED = [
+  { name: 'mcp__datadog__search_logs', description: 'Search logs', mcp: true },
+  { name: 'mcp__claude-in-chrome__navigate', description: 'Open a page', mcp: true },
+]
+
 // The engine's own ui.status and ui.invalidate, which the kit leaves out.
 function quiet(on: On): void {
   on('ui.status', () => ({ value: undefined }))
@@ -115,4 +124,52 @@ test('names hidden tools a later prompt needs, once, without changing the lists'
   expect(seen[2]?.join('\n')).toContain('datadog (2 tools): search_logs, get_trace')
   expect(seen[2]?.join('\n')).toContain('ToolSearch')
   expect(seen[3]).toEqual([])
+})
+
+// With tool search off, Claude Code puts every MCP tool in the prompt and
+// sends no tool listing. Claude sees each server's tools, so no tool group is
+// hidden: the instructions stay, and no later prompt gets a tool note.
+test('hides no tool group when tool search is off', async ($, on) => {
+  const seen: string[][] = []
+  const asked: string[] = []
+  on('prompt.submit', ($, e) => {
+    seen.push([...(e.context ?? [])])
+    return { text: e.text }
+  })
+  on('prompt.attachment', ($, e) => ({ text: e.text }))
+  quiet(on)
+  on('tool.list', () => ({ value: [{ name: 'Read', description: 'Read a file', mcp: false }, ...LISTED] }))
+  on('model.complete', ($, e) => {
+    asked.push(String(e.prompt))
+    return { value: { isAnswered: true, text: 'claude_in_chrome', usage: { inputTokens: 1, outputTokens: 1 } } } as never
+  })
+  const composer = { kind: 'composer' } as const
+
+  await $.prompt.submit({ text: 'Check the login page in the browser', wait: false, origin: composer } as never)
+  const delta = await $.prompt.attachment({ type: 'mcp_instructions_delta', text: BLOCKS, origin: ENGINE } as never)
+  expect(delta.text).toBe(BLOCKS)
+  await $.prompt.submit({ text: 'Now look at the error logs', wait: false, origin: composer } as never)
+
+  expect(asked.some(prompt => prompt.includes('tool groups'))).toBe(false)
+  expect(seen[1]).toEqual([])
+})
+
+// With tool search on, the instructions can come before the tool listing.
+// The plugin then classifies the tool groups from the tool list.
+test('classifies from the tool list when the instructions come first', async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  on('prompt.attachment', ($, e) => ({ text: e.text }))
+  quiet(on)
+  on('tool.list', () => ({ value: [{ name: 'ToolSearch', description: 'Load deferred tools', mcp: false }, ...LISTED] }))
+  on('model.complete', () => ({
+    value: { isAnswered: true, text: 'claude_in_chrome', usage: { inputTokens: 1, outputTokens: 1 } },
+  }) as never)
+
+  await $.prompt.submit({ text: 'Check the login page in the browser', wait: false } as never)
+  const delta = await $.prompt.attachment({ type: 'mcp_instructions_delta', text: BLOCKS, origin: ENGINE } as never)
+  expect(delta.text).toContain('Chrome rules.')
+  expect(delta.text).not.toContain('Datadog rules.')
+
+  const tools = await $.prompt.attachment({ type: 'deferred_tools_delta', text: TOOLS, origin: ENGINE } as never)
+  expect(tools.text).not.toContain('mcp__datadog__search_logs')
 })

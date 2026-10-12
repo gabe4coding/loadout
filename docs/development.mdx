@@ -90,6 +90,9 @@ The test sends two prompts in one session. It checks these results:
 4. The second prompt asks for the weather. It gets a note that names the weather tools.
 5. Claude loads a weather tool with ToolSearch and calls it.
 
+At the same time, the test runs a second session with tool search off. It checks that the plugin keeps the
+instructions of all servers.
+
 - It needs a logged-in Claude Code. It costs API usage, less than $0.01 with Haiku. Use `--model` to change the model.
 - The checks read the trace file of the plugin and the calls to the fake servers. They do not read the reply of the
   model.

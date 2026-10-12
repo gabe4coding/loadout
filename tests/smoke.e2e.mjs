@@ -1,6 +1,7 @@
 // End-to-end smoke test: real headless Claude Code, this plugin and two fake
 // MCP servers. The hooks tests fake Claude Code and the classifier. This test
-// runs them all together, in one session with two prompts.
+// runs them all together: one session with two prompts, and one session with
+// tool search off.
 //
 //   node tests/smoke.e2e.mjs                   one run with Haiku
 //   node tests/smoke.e2e.mjs --model sonnet --keep
@@ -31,13 +32,25 @@ const PROMPTS = [
   'Now give me the weather forecast for Milan for tomorrow.',
 ]
 
-console.log(`claude -p with ${model}`)
-const { dir: out, exit, results, trace, calls: served } = await runSession({
-  prompts: PROMPTS,
-  allow: [tool(TRACKER, 'list_issues'), tool(WEATHER, 'get_forecast')],
-  model,
-  prefix: 'loadout-smoke-',
-})
+// A second session with tool search off: Claude Code puts the MCP tools in
+// the prompt and builds no tool listing. Claude sees every server's tools, so
+// the plugin must keep every instruction block.
+console.log(`claude -p with ${model}, two sessions`)
+const [{ dir: out, exit, results, trace, calls: served }, off] = await Promise.all([
+  runSession({
+    prompts: PROMPTS,
+    allow: [tool(TRACKER, 'list_issues'), tool(WEATHER, 'get_forecast')],
+    model,
+    prefix: 'loadout-smoke-',
+  }),
+  runSession({
+    prompts: ['List the open issues of project OPS in the issue tracker.'],
+    allow: [tool(TRACKER, 'list_issues')],
+    model,
+    prefix: 'loadout-smoke-off-',
+    toolSearch: false,
+  }),
+])
 const toolListings = trace.filter(t => t.event === 'listing' && t.type === 'deferred_tools_delta')
 const scoped = toolListings.find(t => t.isScoped)
 const shown = value => JSON.stringify(value)
@@ -81,6 +94,14 @@ const cases = {
   'Claude loads the hidden tool and calls it': () => {
     assert.ok(served.some(c => c.tool === 'get_forecast'), `calls: ${shown(served)}`)
   },
+
+  'with tool search off, all instruction blocks stay': () => {
+    assert.equal(off.exit, 0, `exit ${off.exit}, see ${off.dir}/stderr.txt`)
+    assert.ok(!off.trace.some(t => t.type === 'deferred_tools_delta'), `a tool listing with tool search off: ${shown(off.trace)}`)
+    const events = off.trace.filter(t => t.event === 'mcp_instructions')
+    assert.ok(events.length > 0, `no mcp_instructions in the trace: ${shown(off.trace)}`)
+    for (const t of events) assert.deepEqual(t.removed, [], `mcp_instructions: ${shown(events)}`)
+  },
 }
 
 let failed = 0
@@ -94,7 +115,9 @@ for (const [name, fn] of Object.entries(cases)) {
   }
 }
 
-if (failed === 0 && !keep) fs.rmSync(out, { recursive: true, force: true })
-else console.log(`run folder: ${out}`)
+for (const dir of [out, off.dir]) {
+  if (failed === 0 && !keep) fs.rmSync(dir, { recursive: true, force: true })
+  else console.log(`run folder: ${dir}`)
+}
 console.log(failed === 0 ? 'all passed' : `${failed} failed`)
 process.exit(failed === 0 ? 0 : 1)

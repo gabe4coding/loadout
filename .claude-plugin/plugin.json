@@ -1,6 +1,6 @@
 {
   "name": "loadout",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Reads the first prompt of a session and hides the deferred tools, skills and MCP server instructions that the task does not need.",
   "types": "./types/index.d.ts",
   "author": {
