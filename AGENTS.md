@@ -11,6 +11,7 @@ gets a note when it needs a hidden item. The whole repo is the plugin (marketpla
 - Behaviour end to end → `docs/how-it-works.mdx`. Known limits → `docs/troubleshooting.mdx`.
 - What real Claude Code does (event order, origins) → `tests/smoke.e2e.mjs` and `.claude/skills/verify/` (`drive.mjs`
   drives any prompts and prints the evidence). Run one before you trust an assumption about the engine.
+- Measure cost, speed and quality with and without the plugin → `evals/impact.mjs` (docs: `docs/development.mdx`).
 - The engine API (`$`, events, `claude-code/testing`) → `.claude-plugin/types/claude-code/index.d.ts`. Claude Code
   writes it when the plugin loads with `--plugin-dir`. It is not in git.
 

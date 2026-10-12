@@ -131,6 +131,37 @@ test('keeps everything when the classifier fails', async ($, on) => {
   expect(tools.text).toBe(TOOLS)
 })
 
+test('traces the token use of each classifier call, also a failed one', { options: { traceFile: '/trace.jsonl' } }, async ($, on) => {
+  let written = ''
+  on('fs.read', () => ({ value: written }))
+  on('fs.write', ($, e) => {
+    written = e.text
+    return { value: undefined }
+  })
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  on('prompt.attachment', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on)
+  const clock = mock.clock(on)
+  on('model.complete', ($, e) =>
+    String(e.prompt).includes('dep-scan')
+      ? ({ value: { isAnswered: false, reason: 'api-error', status: 500, error: 'x' } } as never)
+      : answer('claude_in_chrome'),
+  )
+
+  await $.prompt.submit({ text: 'Check the login page in the browser', wait: false, origin: COMPOSER } as never)
+  await $.prompt.attachment({ type: 'deferred_tools_delta', text: TOOLS, origin: ENGINE } as never)
+  await $.prompt.attachment({ type: 'skill_listing', text: SKILLS, origin: ENGINE } as never)
+
+  // Trace lines are written one after the other: let them settle.
+  await clock.advance(0)
+  const calls = written.split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(line => line.event === 'classifier')
+  expect(calls).toEqual([
+    { event: 'classifier', purpose: 'tools', model: 'haiku', isAnswered: true, usage: { inputTokens: 1, outputTokens: 1 } },
+    { event: 'classifier', purpose: 'skills', model: 'haiku', isAnswered: false, usage: null },
+  ])
+})
+
 test('passes listings through before the first prompt', async ($, on) => {
   on('prompt.attachment', ($, e) => ({ text: e.text }))
   const skills = await $.prompt.attachment({ type: 'skill_listing', text: SKILLS, origin: ENGINE } as never)

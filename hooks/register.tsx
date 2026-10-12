@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, ToolInfo, TurnStepResult } from 'claude-code'
+import type { EngineInterface, ModelCompleteRequest, Register, ToolInfo, TurnStepResult } from 'claude-code'
 
 import type { Choice, Effort, Offer, Route, ServerFact, SkillFact, Switches } from '../types'
 import {
@@ -126,10 +126,10 @@ let picking: Promise<Effort | null> | null = null
 // and time, for the cache check after a change of effort.
 let last: { sent: string; model: string; cached: number; at: number } | null = null
 
-async function choose($: EngineInterface, kind: Kind, listing: Listing): Promise<Choice> {
+async function choose($: EngineInterface, file: string, kind: Kind, listing: Listing): Promise<Choice> {
   const before = await readChoice($, kind)
   if (before !== null && unseenGroups(listing, kind, before).length === 0) return before
-  const run = queue.then(() => decide($, kind, listing))
+  const run = queue.then(() => decide($, file, kind, listing))
   queue = run.catch(() => undefined)
   return run
 }
@@ -151,6 +151,14 @@ function trace($: EngineInterface, file: string, line: Record<string, unknown>):
       await $.fs.write(file, `${before}${JSON.stringify(line)}\n`)
     })
     .catch(() => undefined)
+}
+
+// One classifier call: the reply's text, or null on any failure. Its trace
+// line holds the token use, which the session's own cost leaves out.
+async function complete($: EngineInterface, file: string, purpose: string, request: ModelCompleteRequest): Promise<string | null> {
+  const reply = await $.model.complete(request).catch(() => null)
+  trace($, file, { event: 'classifier', purpose, model: request.model, isAnswered: reply?.isAnswered === true, usage: reply?.isAnswered ? reply.usage : null })
+  return reply?.isAnswered ? reply.text : null
 }
 
 export const register: Register = (on, options) => {
@@ -236,7 +244,7 @@ export const register: Register = (on, options) => {
       return base
     }
     const listing = parseTools(base.text)
-    const choice = await choose($, 'tools', listing)
+    const choice = await choose($, file, 'tools', listing)
     $.ui.invalidate('prompt.section')
     const out = rebuild(listing, choice.kept, 'tools')
     trace($, file, { event: 'listing', type: e.type, isScoped: true, kept: choice.kept, alwaysKept: choice.always, hidden: out.hidden })
@@ -252,7 +260,7 @@ export const register: Register = (on, options) => {
       trace($, file, { event: 'listing', type: e.type, isScoped: false })
       return base
     }
-    const choice = await choose($, 'skills', listing)
+    const choice = await choose($, file, 'skills', listing)
     const out = rebuild(listing, choice.kept, 'skills')
     trace($, file, { event: 'listing', type: e.type, isScoped: true, kept: choice.kept, alwaysKept: choice.always, hidden: out.hidden })
     return { text: out.text }
@@ -269,7 +277,7 @@ export const register: Register = (on, options) => {
   on('prompt.section', async ($, e, next) => {
     const base = await next(e)
     if (base.text === null || !base.text.includes('# MCP Server Instructions')) return base
-    const text = await trimmed($, base.text)
+    const text = await trimmed($, file, base.text)
     trace($, file, { event: 'mcp_instructions', where: e.name, removed: removedServers(base.text, text) })
     return { text }
   })
@@ -277,7 +285,7 @@ export const register: Register = (on, options) => {
   on('prompt.attachment', { type: /mcp_instructions/ }, async ($, e, next) => {
     const base = await next(e)
     if (base.text === null) return base
-    const text = await trimmed($, base.text)
+    const text = await trimmed($, file, base.text)
     trace($, file, { event: 'mcp_instructions', where: e.type, removed: removedServers(base.text, text) })
     return { text }
   })
@@ -536,22 +544,22 @@ async function remember($: EngineInterface, text: string): Promise<string[]> {
 // Null on any failure.
 async function pickWord<T>(
   $: EngineInterface,
+  file: string,
+  purpose: string,
   system: string,
   text: string,
   earlier: string[],
   parse: (reply: string) => T | null,
 ): Promise<T | null> {
-  const reply = await $.model
-    .complete({ model: 'haiku', system, prompt: promptBlock(text, earlier), maxTokens: 20, effort: 'low', timeoutMs: 5000 })
-    .catch(() => null)
-  return reply?.isAnswered ? parse(reply.text) : null
+  const reply = await complete($, file, purpose, { model: 'haiku', system, prompt: promptBlock(text, earlier), maxTokens: 20, effort: 'low', timeoutMs: 5000 })
+  return reply === null ? null : parse(reply)
 }
 
 // Asks the classifier for the model of the session, from its first prompt. A
 // smaller model goes to the person, who must approve it. On any failure, or a
 // dismissed question, the session keeps its model.
 async function chooseModel($: EngineInterface, file: string, text: string): Promise<void> {
-  const [picked, session] = await Promise.all([pickWord($, MODEL, text, [], parseModel), $.session.model()])
+  const [picked, session] = await Promise.all([pickWord($, file, 'model', MODEL, text, [], parseModel), $.session.model()])
   const to = picked === null ? null : routeModel(picked, session)
   trace($, file, { event: 'model_pick', picked, session, to })
   if (to === null) return
@@ -612,7 +620,7 @@ async function endRoute($: EngineInterface): Promise<void> {
 // Asks the classifier for the effort of a prompt of the person. Null on any
 // failure: the request then keeps the effort it has.
 async function pickEffort($: EngineInterface, file: string, text: string, earlier: string[]): Promise<Effort | null> {
-  const picked = await pickWord($, EFFORT, text, earlier, parseEffort)
+  const picked = await pickWord($, file, 'effort', EFFORT, text, earlier, parseEffort)
   trace($, file, { event: 'effort_pick', picked })
   return picked
 }
@@ -661,17 +669,15 @@ function promptBlock(text: string, earlier: string[]): string {
 // earlier prompts the task is not checked.
 async function recall($: EngineInterface, file: string, text: string, earlier: string[], open: Offer[]): Promise<Offer[]> {
   const hidden = open.length === 0 ? 'none' : open.map(offer => offer.row).join('\n')
-  const reply = await $.model
-    .complete({
-      model: 'haiku',
-      system: earlier.length === 0 ? RECALL : `${RECALL}\n${TASK_CHECK}`,
-      prompt: `${promptBlock(text, earlier)}\n\nHidden:\n${hidden}`,
-      maxTokens: 300,
-      effort: 'low',
-      timeoutMs: 5000,
-    })
-    .catch(() => null)
-  const answer = reply?.isAnswered ? reply.text : ''
+  const reply = await complete($, file, 'recall', {
+    model: 'haiku',
+    system: earlier.length === 0 ? RECALL : `${RECALL}\n${TASK_CHECK}`,
+    prompt: `${promptBlock(text, earlier)}\n\nHidden:\n${hidden}`,
+    maxTokens: 300,
+    effort: 'low',
+    timeoutMs: 5000,
+  })
+  const answer = reply ?? ''
   const isNew = earlier.length > 0 && isNewTask(answer)
   const kept = parseKept(answer, open.map(offer => offer.group))
   const picked = open.filter(offer => kept.includes(offer.group))
@@ -716,16 +722,16 @@ async function scopedTools($: EngineInterface): Promise<ToolInfo[] | null> {
 // that connects late can raise its instructions before its tools. So the tool
 // groups are classified here from the MCP tools of the session: `decide`
 // classifies only the new groups, and the tool listing reuses the decision.
-async function trimmed($: EngineInterface, text: string): Promise<string> {
+async function trimmed($: EngineInterface, file: string, text: string): Promise<string> {
   const listed = await scopedTools($)
   if (listed === null) return text
-  const choice = await choose($, 'tools', mcpTools(listed))
+  const choice = await choose($, file, 'tools', mcpTools(listed))
   return trimMcpInstructions(text, new Set(choice.hidden.filter(group => !front.has(group))))
 }
 
 // Classifies only the groups not seen before, so a later delta (an MCP server
 // that connected late) gets a decision of its own and earlier ones stay.
-async function decide($: EngineInterface, kind: Kind, listing: Listing): Promise<Choice> {
+async function decide($: EngineInterface, file: string, kind: Kind, listing: Listing): Promise<Choice> {
   const before: Choice = (await readChoice($, kind)) ?? { kept: [], hidden: [], always: [] }
   const unseen = unseenGroups(listing, kind, before)
   if (unseen.length === 0) return before
@@ -738,7 +744,7 @@ async function decide($: EngineInterface, kind: Kind, listing: Listing): Promise
     open.includes(row.group),
   )
   const rows = catalog.map(row => row.row)
-  const picked = open.length === 0 ? [] : await classify($, kind, (await read($, prompt)) ?? '', rows, open)
+  const picked = open.length === 0 ? [] : await classify($, file, kind, (await read($, prompt)) ?? '', rows, open)
   const kept = [...always, ...picked]
   const dropped = catalog
     .filter(row => !kept.includes(row.group))
@@ -770,24 +776,22 @@ async function writeChoice($: EngineInterface, kind: Kind, choice: Choice): Prom
 // On any failure everything is kept: a wrong cut costs more than no cut.
 async function classify(
   $: EngineInterface,
+  file: string,
   kind: Kind,
   task: string,
   rows: string[],
   groups: string[],
 ): Promise<string[]> {
   const what = kind === 'tools' ? 'tool groups (id, then sample tools)' : 'skills (id: description)'
-  const reply = await $.model
-    .complete({
-      model: 'haiku',
-      system: SYSTEM,
-      prompt: `Task:\n<task>\n${task}\n</task>\n\nAvailable ${what}:\n${rows.join('\n')}`,
-      maxTokens: 800,
-      effort: 'low',
-      timeoutMs: 10000,
-    })
-    .catch(() => null)
-  if (reply === null || !reply.isAnswered) return groups
-  return parseKept(reply.text, groups)
+  const reply = await complete($, file, kind, {
+    model: 'haiku',
+    system: SYSTEM,
+    prompt: `Task:\n<task>\n${task}\n</task>\n\nAvailable ${what}:\n${rows.join('\n')}`,
+    maxTokens: 800,
+    effort: 'low',
+    timeoutMs: 10000,
+  })
+  return reply === null ? groups : parseKept(reply, groups)
 }
 
 async function summary($: EngineInterface, defaults: Switches): Promise<string> {
