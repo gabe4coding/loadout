@@ -39,7 +39,7 @@ enforces; the others rely on discipline.
     test kit has no model.
   - `node tests/docs.check.mjs`: the doc rules below.
 - `node tests/smoke.e2e.mjs`: real `claude -p` with the plugin and two fake MCP servers, two prompts in one
-  session. It needs a login and costs API usage, so it is not one of the three checks and CI does not run it. Run
+  session, and one session with tool search off. It needs a login and costs API usage, so it is not one of the three checks and CI does not run it. Run
   it after a plugin change, before a release, and after you raise the pinned Claude Code version. Its checks read
   the trace file (`traceFile` option) and the fake servers' calls, never the words of the model: the transcript keeps
   a listing as Claude Code made it, not as the plugin answered it.

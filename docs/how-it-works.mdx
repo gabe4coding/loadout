@@ -32,6 +32,9 @@ of your own hooks.
 
 If a server connects later, the plugin classifies only its tool group. The earlier decisions stay.
 
+If tool search is off, or a deny rule blocks ToolSearch, Claude Code puts all MCP tools in the prompt. Claude then
+sees the tools of all servers. The plugin hides no tool group and keeps the instructions of all servers.
+
 ## Notes
 
 Each listing that lost items ends with a note. The note gives the number of hidden items and tells Claude how to

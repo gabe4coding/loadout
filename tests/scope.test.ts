@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { flipKeep, isAlwaysKept, parseKeep, parseKept, parseSkills, parseTools, rebuild, trimMcpInstructions } from '../hooks/scope'
+import { flipKeep, isAlwaysKept, mcpTools, parseKeep, parseKept, parseSkills, parseTools, rebuild, trimMcpInstructions, unseenGroups } from '../hooks/scope'
 
 test('reads only known ids from a loose classifier reply', () => {
   const kept = parseKept('- `datadog`\n"slack", unknown\n\n  github  ', ['datadog', 'slack', 'github'])
@@ -50,4 +50,15 @@ test('setting a mark adds the group once, clearing it removes each name that cov
   expect(flipKeep(['retro'], 'retro:recall', 'skills', true)).toEqual(['retro'])
   expect(flipKeep(['retro', 'kb-search'], 'retro:recall', 'skills', false)).toEqual(['kb-search'])
   expect(flipKeep(['Claude-In-Chrome'], 'claude_in_chrome', 'tools', false)).toEqual([])
+})
+
+test('groups only the MCP tools of the tool list, and finds the groups no decision covers', () => {
+  const listing = mcpTools([
+    { name: 'ToolSearch', mcp: false },
+    { name: 'mcp__datadog__search_logs', mcp: true },
+    { name: 'mcp__slack__send_message', mcp: true },
+  ])
+  expect(listing.entries.map(entry => entry.group)).toEqual(['datadog', 'slack'])
+  expect(unseenGroups(listing, 'tools', { kept: ['datadog'], hidden: [] })).toEqual(['slack'])
+  expect(unseenGroups(listing, 'tools', null)).toEqual(['datadog', 'slack'])
 })

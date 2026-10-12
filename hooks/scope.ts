@@ -85,6 +85,21 @@ export function groupsOf(listing: Listing, kind: 'tools' | 'skills'): string[] {
   return [...groups]
 }
 
+// The MCP tools of the session ($.tool.list()) as a tool listing.
+export function mcpTools(listed: readonly { name: string; mcp: boolean }[]): Listing {
+  return parseTools(listed.filter(info => info.mcp).map(info => info.name).join('\n'))
+}
+
+// The groups of `listing` that no decision covers yet.
+export function unseenGroups(
+  listing: Listing,
+  kind: 'tools' | 'skills',
+  before: { kept: readonly string[]; hidden: readonly string[] } | null,
+): string[] {
+  const seen = new Set([...(before?.kept ?? []), ...(before?.hidden ?? [])])
+  return groupsOf(listing, kind).filter(group => !seen.has(group))
+}
+
 // Reads the alwaysKeep option: names split on commas or white space, once each.
 export function parseKeep(text: string): string[] {
   return [...new Set(text.split(/[\s,]+/).filter(name => name !== ''))]

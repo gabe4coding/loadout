@@ -1,11 +1,12 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, ToolInfo } from 'claude-code'
 
 import type { Choice, Offer } from '../types'
 import {
   flipKeep,
   groupsOf,
   isAlwaysKept,
+  mcpTools,
   normalize,
   parseKeep,
   parseKept,
@@ -17,6 +18,7 @@ import {
   toolGroup,
   removedServers,
   trimMcpInstructions,
+  unseenGroups,
 } from './scope'
 import type { Listing } from './scope'
 
@@ -52,17 +54,20 @@ const RECALL = [
 ].join('\n')
 
 // Decisions run one at a time, so two listings raised together (main and a
-// subagent) do not classify the same groups twice.
+// subagent) do not classify the same groups twice. A listing with no new group
+// gets the stored decision at once, with no wait behind a classifier call.
 let queue: Promise<unknown> = Promise.resolve()
 
-function choose($: EngineInterface, kind: Kind, listing: Listing): Promise<Choice> {
+async function choose($: EngineInterface, kind: Kind, listing: Listing): Promise<Choice> {
+  const before = await readChoice($, kind)
+  if (before !== null && unseenGroups(listing, kind, before).length === 0) return before
   const run = queue.then(() => decide($, kind, listing))
   queue = run.catch(() => undefined)
   return run
 }
 
-// The servers with a tool in the prompt's own list, not behind ToolSearch.
-// Their instructions always stay: Claude sees their tools.
+// The servers with a tool that a plugin keeps in the prompt's own list while
+// tool search is on. Their instructions always stay: Claude sees their tools.
 const front = new Set<string>()
 
 // One JSON line per decision when the traceFile option names a file. The
@@ -115,7 +120,7 @@ export const register: Register = (on, options) => {
 
   on('prompt.attachment', { type: 'deferred_tools_delta' }, async ($, e, next) => {
     const base = await next(e)
-    if (base.text === null || (await isSkipped($))) {
+    if (base.text === null || (await scopedTools($)) === null) {
       trace($, file, { event: 'listing', type: e.type, isScoped: false })
       return base
     }
@@ -233,7 +238,7 @@ type Item = { kind: Kind; group: string; status: '' | 'kept' | 'hidden' }
 // from the MCP tools and the skill listings that the plugin did not scope.
 async function items($: EngineInterface): Promise<Item[]> {
   const [t, s, names] = await Promise.all([readChoice($, 'tools'), readChoice($, 'skills'), read($, skillNames)])
-  const servers = t === null ? groupsOf(await mcpTools($).catch(() => parseTools('')), 'tools') : []
+  const servers = t === null ? groupsOf(mcpTools(await $.tool.list().catch(() => [])), 'tools') : []
   const list = (kind: Kind, choice: Choice | null, seen: string[]): Item[] =>
     [...new Set([...seen, ...(choice?.kept ?? []), ...(choice?.hidden ?? [])])].sort().map(group => ({
       kind,
@@ -342,26 +347,33 @@ async function isSkipped($: EngineInterface): Promise<boolean> {
   return (await read($, isOff)) || (await read($, prompt)) === null
 }
 
-// Claude Code can raise the instructions before the tool listing. Then the
-// tool groups are classified here, from the MCP tools of the session, and the
-// tool listing reuses the decision.
-async function trimmed($: EngineInterface, text: string): Promise<string> {
-  if (await isSkipped($)) return text
-  const choice = (await read($, tools)) ?? (await choose($, 'tools', await mcpTools($)))
-  return trimMcpInstructions(text, new Set(choice.hidden.filter(group => !front.has(group))))
+// The tools of the session, or null when no tool group may be hidden: the
+// session is skipped, or it has no ToolSearch. Without ToolSearch (tool search
+// off, or a deny rule on it) the engine puts every MCP tool in the prompt, so
+// Claude sees them all. The engine still says isDeferred for these tools, so
+// ToolSearch in the tool list is the one sign.
+async function scopedTools($: EngineInterface): Promise<ToolInfo[] | null> {
+  if (await isSkipped($)) return null
+  const listed = await $.tool.list()
+  return listed.some(info => info.name === 'ToolSearch') ? listed : null
 }
 
-async function mcpTools($: EngineInterface): Promise<Listing> {
-  const names = (await $.tool.list()).filter(info => info.mcp).map(info => info.name)
-  return parseTools(names.join('\n'))
+// Claude Code can raise the instructions before the tool listing, and a server
+// that connects late can raise its instructions before its tools. So the tool
+// groups are classified here from the MCP tools of the session: `decide`
+// classifies only the new groups, and the tool listing reuses the decision.
+async function trimmed($: EngineInterface, text: string): Promise<string> {
+  const listed = await scopedTools($)
+  if (listed === null) return text
+  const choice = await choose($, 'tools', mcpTools(listed))
+  return trimMcpInstructions(text, new Set(choice.hidden.filter(group => !front.has(group))))
 }
 
 // Classifies only the groups not seen before, so a later delta (an MCP server
 // that connected late) gets a decision of its own and earlier ones stay.
 async function decide($: EngineInterface, kind: Kind, listing: Listing): Promise<Choice> {
   const before: Choice = (await readChoice($, kind)) ?? { kept: [], hidden: [], always: [] }
-  const seen = new Set([...before.kept, ...before.hidden])
-  const unseen = groupsOf(listing, kind).filter(group => !seen.has(group))
+  const unseen = unseenGroups(listing, kind, before)
   if (unseen.length === 0) return before
 
   // The always-kept groups skip the classifier: it cannot hide them.
@@ -428,10 +440,13 @@ async function summary($: EngineInterface): Promise<string> {
   if (await read($, isOff)) return 'loadout is off for this session.'
   const [t, s] = [await read($, tools), await read($, skills)]
   if (t === null && s === null) return 'loadout has not picked a loadout for this session yet. Send a prompt first.'
+  // No tool decision: the session has no ToolSearch or no MCP tools.
+  const toolLines = t === null
+    ? ['Tool groups hidden: none']
+    : [`Tool groups kept: ${t.kept.join(', ') || 'none'}`, `Tool groups hidden: ${t.hidden.join(', ') || 'none'}`]
   return [
     `Always kept: ${[...(t?.always ?? []), ...(s?.always ?? [])].join(', ') || 'none'}`,
-    `Tool groups kept: ${t?.kept.join(', ') || 'none'}`,
-    `Tool groups hidden: ${t?.hidden.join(', ') || 'none'}`,
+    ...toolLines,
     `Skills kept: ${s?.kept.join(', ') || 'none'}`,
     `Skills hidden: ${s?.hidden.length ?? 0}`,
     `Named to later prompts: ${(await read($, surfaced)).join(', ') || 'none'}`,
