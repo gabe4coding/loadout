@@ -1,28 +1,28 @@
 ---
 title: Troubleshooting
-description: Common problems with context-scope and the known limits.
+description: Common problems with loadout and the known limits.
 ---
 
 # Troubleshooting
 
 ## The plugin does not load
 
-If `/scope` is not in the command list, do these steps:
+If `/loadout` is not in the command list, do these steps:
 
-1. Run `claude plugin list` in a shell. Find `context-scope@dynamic-profiles` and check that its status is
+1. Run `claude plugin list` in a shell. Find `loadout@loadout` and check that its status is
    `enabled`.
 2. Run `/reload-plugins` in the session, or start a new session.
-3. Start Claude Code with `claude --debug`. Find the lines that start with `context-scope:`. They give the reason.
+3. Start Claude Code with `claude --debug`. Find the lines that start with `loadout:`. They give the reason.
 
-## `/scope` says that the session is not scoped yet
+## `/loadout` says that the session has no loadout yet
 
-The plugin sets the scope from the first prompt. Send a prompt, then type `/scope` again.
+The plugin sets the loadout from the first prompt. Send a prompt, then type `/loadout` again.
 
 ## Claude cannot find a tool or a skill
 
 Claude can load each hidden item. Ask Claude to search with ToolSearch for a tool, or with SearchSkills for a skill.
 
-If the scope is wrong for the full task, type `/scope off`. Then start a new session with a first prompt that names
+If the loadout is wrong for the full task, type `/loadout off`. Then start a new session with a first prompt that names
 the full task.
 
 ## The session is still large
@@ -41,7 +41,7 @@ Add this entry to `~/.claude/settings.json`:
 ```json
 {
   "pluginConfigs": {
-    "context-scope": { "options": { "traceFile": "/tmp/context-scope.jsonl" } }
+    "loadout": { "options": { "traceFile": "/tmp/loadout.jsonl" } }
   }
 }
 ```
@@ -57,7 +57,7 @@ contains names and counts only, not the text of your prompts.
 
 ## Limits
 
-- The plugin scopes a session from its first prompt only. A task that changes direction keeps the first scope.
+- The plugin picks the loadout from the first prompt only. A task that changes direction keeps the first loadout.
   Later prompts get notes, but the listings do not change.
 - If Claude Code builds a listing before the plugin has the first prompt, that listing is complete. The plugin then
   does not change it, to keep the prompt cache valid.

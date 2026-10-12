@@ -35,7 +35,7 @@ const TRACKER = 'smoke_tracker'
 const WEATHER = 'smoke_weather'
 const tool = (server, name) => `mcp__${server}__${name}`
 const sessionId = crypto.randomUUID()
-const out = fs.mkdtempSync(path.join(os.tmpdir(), 'context-scope-smoke-'))
+const out = fs.mkdtempSync(path.join(os.tmpdir(), 'loadout-smoke-'))
 const cwd = path.join(out, 'cwd')
 fs.mkdirSync(cwd)
 const calls = path.join(out, 'calls.jsonl')
@@ -51,7 +51,7 @@ const PROMPTS = [
   'Now give me the weather forecast for Milan for tomorrow.',
 ]
 
-const settings = { pluginConfigs: { 'context-scope': { options: { traceFile } } } }
+const settings = { pluginConfigs: { 'loadout': { options: { traceFile } } } }
 const argv = [
   '-p',
   '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
@@ -106,7 +106,7 @@ const cases = {
 
   // The open question of the design: does the first prompt reach the plugin
   // before Claude Code builds the first tool listing?
-  'the plugin scopes the first tool listing': () => {
+  'the plugin changes the first tool listing': () => {
     assert.ok(toolListings.length > 0, `no tool listing in the trace (is ToolSearch on?): ${shown(trace)}`)
     assert.equal(toolListings[0].isScoped, true, `Claude Code built the first tool listing before the first prompt reached the plugin: ${shown(toolListings)}`)
   },

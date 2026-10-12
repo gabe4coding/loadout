@@ -17,12 +17,12 @@ import {
 import type { Listing } from './scope'
 
 
-const prompt = atom({ plugin: 'context-scope', key: 'prompt' } as const, null)
-const tools = atom({ plugin: 'context-scope', key: 'tools' } as const, null)
-const skills = atom({ plugin: 'context-scope', key: 'skills' } as const, null)
-const isOff = atom({ plugin: 'context-scope', key: 'isOff' } as const, false)
-const offers = atom({ plugin: 'context-scope', key: 'offers' } as const, [])
-const surfaced = atom({ plugin: 'context-scope', key: 'surfaced' } as const, [])
+const prompt = atom({ plugin: 'loadout', key: 'prompt' } as const, null)
+const tools = atom({ plugin: 'loadout', key: 'tools' } as const, null)
+const skills = atom({ plugin: 'loadout', key: 'skills' } as const, null)
+const isOff = atom({ plugin: 'loadout', key: 'isOff' } as const, false)
+const offers = atom({ plugin: 'loadout', key: 'offers' } as const, [])
+const surfaced = atom({ plugin: 'loadout', key: 'surfaced' } as const, [])
 
 type Kind = 'tools' | 'skills'
 
@@ -73,13 +73,13 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
-      name: 'scope',
-      description: 'Show what context-scope hid; "/scope off" or "/scope on" to switch it',
+      name: 'loadout',
+      description: 'Show the loadout of this session; "/loadout off" or "/loadout on" to switch it',
     })
     return next(e)
   })
 
-  // The first prompt sets the scope. A later prompt never changes the lists,
+  // The first prompt sets the loadout. A later prompt never changes the lists,
   // which would spend the prompt cache: it gets a note naming the hidden
   // items it needs, attached to that prompt alone.
   on('prompt.submit', async ($, e, next) => {
@@ -147,13 +147,13 @@ export const register: Register = (on, options) => {
     return { text }
   })
 
-  on('command.run', { command: 'scope' }, async ($, e) => {
+  on('command.run', { command: 'loadout' }, async ($, e) => {
     const word = e.args.trim()
     if (word === 'off' || word === 'on') {
       await update($, isOff, () => word === 'off')
       $.ui.invalidate('prompt.attachment')
       $.ui.invalidate('prompt.section')
-      return { text: `context-scope is ${word} for this session. The next request uses it.` }
+      return { text: `loadout is ${word} for this session. The next request uses it.` }
     }
     return { text: await summary($) }
   })
@@ -185,7 +185,7 @@ async function recall($: EngineInterface, text: string): Promise<Offer[]> {
   if (picked.length === 0) return []
 
   await update($, surfaced, list => [...list, ...picked.map(offer => offer.group)])
-  $.ui.status(`scope: pointed to ${picked.map(offer => offer.group).join(', ')}`)
+  $.ui.status(`loadout: pointed to ${picked.map(offer => offer.group).join(', ')}`)
   return picked
 }
 
@@ -194,10 +194,10 @@ function recallNotes(picked: Offer[]): string[] {
   const skills = picked.filter(offer => offer.kind === 'skills').map(offer => `- ${offer.row}`)
   const notes: string[] = []
   if (tools.length > 0) {
-    notes.push(`context-scope: this prompt may need tools hidden at session start. Load them with ToolSearch ("select:<name>" or keywords):\n${tools.join('\n')}`)
+    notes.push(`loadout: this prompt may need tools hidden at session start. Load them with ToolSearch ("select:<name>" or keywords):\n${tools.join('\n')}`)
   }
   if (skills.length > 0) {
-    notes.push(`context-scope: this prompt may need skills hidden from the skill list. Call Skill with the name:\n${skills.join('\n')}`)
+    notes.push(`loadout: this prompt may need skills hidden from the skill list. Call Skill with the name:\n${skills.join('\n')}`)
   }
   return notes
 }
@@ -245,7 +245,7 @@ async function decide($: EngineInterface, kind: Kind, listing: Listing): Promise
   }
   await writeChoice($, kind, choice)
   const [t, s] = [await read($, tools), await read($, skills)]
-  $.ui.status(`scope: hid ${t?.hidden.length ?? 0} tool groups, ${s?.hidden.length ?? 0} skills`)
+  $.ui.status(`loadout: hid ${t?.hidden.length ?? 0} tool groups, ${s?.hidden.length ?? 0} skills`)
   return choice
 }
 
@@ -283,9 +283,9 @@ async function classify(
 }
 
 async function summary($: EngineInterface): Promise<string> {
-  if (await read($, isOff)) return 'context-scope is off for this session.'
+  if (await read($, isOff)) return 'loadout is off for this session.'
   const [t, s] = [await read($, tools), await read($, skills)]
-  if (t === null && s === null) return 'context-scope has not scoped this session yet.'
+  if (t === null && s === null) return 'loadout has not picked a loadout for this session yet. Send a prompt first.'
   return [
     `Tool groups kept: ${t?.kept.join(', ') || 'none'}`,
     `Tool groups hidden: ${t?.hidden.join(', ') || 'none'}`,

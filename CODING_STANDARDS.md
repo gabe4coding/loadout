@@ -34,7 +34,7 @@ enforces; the others rely on discipline.
   the trace file (`traceFile` option) and the fake servers' calls, never the words of the model: the transcript keeps
   a listing as Claude Code made it, not as the plugin answered it.
 - Write a test for each behaviour change. A test that needs `ui.status` or `ui.invalidate` registers the `quiet`
-  hooks in `tests/context-scope.test.ts`: the kit has no implementation for them.
+  hooks in `tests/loadout.test.ts`: the kit has no implementation for them.
 - CI (`.github/workflows/test.yml`) pins the Claude Code version for `claude plugin test .`, and a weekly job runs
   the tests with the newest release.
 - The type check (`docs/development.mdx`) does not run in CI: its types come from a logged-in Claude Code session.
@@ -92,11 +92,11 @@ Technical names are allowed: tool names, options, file and product names.
 
 | Term | Meaning | Do not use |
 | --- | --- | --- |
-| plugin | context-scope as Claude Code installs it | mod, extension |
+| plugin | loadout as Claude Code installs it | mod, extension |
 | listing | A list that Claude reads at session start: the deferred tools, the skills or the MCP server instructions | catalog, context |
 | item | One entry of a listing: a tool, a skill or the instructions of one server | entry |
 | tool group | The MCP tools of one server | server tools, toolset |
-| scope | The items that the plugin keeps for a session | profile, filter |
+| loadout | The items that the plugin keeps for a session | profile, filter, scope |
 | hidden item | An item that the plugin removed from a listing. It still works. | removed, disabled |
 | note | A text that the plugin adds for Claude: at the end of a listing, or after a later prompt | hint, message |
 | classifier | The Haiku call that selects the items to keep | model, AI |

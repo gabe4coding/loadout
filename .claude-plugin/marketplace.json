@@ -1,10 +1,10 @@
 {
-  "name": "dynamic-profiles",
+  "name": "loadout",
   "owner": { "name": "gabe4coding" },
   "description": "A smaller session start for Claude Code: tools and skills scoped to the task.",
   "plugins": [
     {
-      "name": "context-scope",
+      "name": "loadout",
       "source": "./",
       "description": "Reads the first prompt of a session and hides the deferred tools, skills and MCP server instructions that the task does not need."
     }

@@ -111,12 +111,12 @@ export function rebuild(
 
 function note(dropped: Entry[], kind: 'tools' | 'skills'): string {
   if (kind === 'skills') {
-    return `(context-scope hid ${dropped.length} more skills that look unrelated to this task. They still work: find one with SearchSkills or ListSkills, or call Skill with its name.)`
+    return `(loadout hid ${dropped.length} more skills that look unrelated to this task. They still work: find one with SearchSkills or ListSkills, or call Skill with its name.)`
   }
   const counts = new Map<string, number>()
   for (const entry of dropped) counts.set(entry.group, (counts.get(entry.group) ?? 0) + 1)
   const groups = [...counts].map(([group, n]) => `${group} (${n})`).join(', ')
-  return `(context-scope hid ${dropped.length} more deferred tools that look unrelated to this task, from: ${groups}. They still work: ToolSearch finds them by keyword.)`
+  return `(loadout hid ${dropped.length} more deferred tools that look unrelated to this task, from: ${groups}. They still work: ToolSearch finds them by keyword.)`
 }
 
 // Drops the "## <server>" blocks of the MCP instructions for the hidden

@@ -1,4 +1,4 @@
-# context-scope
+# loadout
 
 A Claude Code plugin (one hooks module). It reads the first prompt of a session, asks Haiku which deferred tools,
 skills and MCP server instructions the task needs, and hides the rest from the listings Claude reads. A later prompt
@@ -6,7 +6,7 @@ gets a note when it needs a hidden item. The whole repo is the plugin (marketpla
 
 ## Read first, by task
 - Any change to code, tests, model-facing text or docs → `CODING_STANDARDS.md`.
-- Hooks, Haiku calls, `/scope`, session state → `hooks/register.ts`. Parse and rebuild of listings (pure, no `$`)
+- Hooks, Haiku calls, `/loadout`, session state → `hooks/register.ts`. Parse and rebuild of listings (pure, no `$`)
   → `hooks/scope.ts`. State contract → `types/index.d.ts`.
 - Behaviour end to end → `docs/how-it-works.mdx`. Known limits → `docs/troubleshooting.mdx`.
 - What real Claude Code does (event order, origins) → `tests/smoke.e2e.mjs` and its trace. Run it before you trust

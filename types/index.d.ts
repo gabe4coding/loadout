@@ -7,7 +7,7 @@ export type Offer = { kind: 'tools' | 'skills'; group: string; row: string }
 
 declare module 'claude-code' {
   interface PluginState {
-    'context-scope': {
+    'loadout': {
       prompt: string | null
       tools: Choice | null
       skills: Choice | null

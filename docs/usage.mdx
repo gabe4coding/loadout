@@ -1,6 +1,6 @@
 ---
 title: Usage
-description: How the first prompt sets the scope, what /scope shows, and what happens on later prompts.
+description: How the first prompt sets the loadout, what /loadout shows, and what happens on later prompts.
 ---
 
 # Usage
@@ -9,19 +9,19 @@ You do not run the plugin. It works on each session from the first prompt.
 
 ## Write a clear first prompt
 
-The first prompt sets the scope for the full session. The classifier sees only this prompt and a short list of the
+The first prompt sets the loadout for the full session. The classifier sees only this prompt and a short list of the
 items.
 
 - Name the task and the systems it touches, for example "Find the cause of the 500 errors in Datadog and fix the
   handler".
 - If the task will grow, say so in the first prompt, for example "then open a pull request".
-- A prompt with only whitespace does not set the scope. The next prompt does.
+- A prompt with only whitespace does not set the loadout. The next prompt does.
 
 The classifier keeps generously. It keeps each item that can help with the task or its next steps.
 
-## See the scope
+## See the loadout
 
-Type `/scope`. The command shows these lines:
+Type `/loadout`. The command shows these lines:
 
 | Line | Meaning |
 | --- | --- |
@@ -35,7 +35,7 @@ The plugin always keeps the deferred tools of Claude Code itself, for example `W
 
 ## Turn it off for a session
 
-Type `/scope off`. The next request has the full listings again. Type `/scope on` to scope the session again.
+Type `/loadout off`. The next request has the full listings again. Type `/loadout on` to pick a loadout again.
 
 Each switch changes the listings. The next request thus cannot use the prompt cache. Do not switch often.
 
@@ -47,7 +47,7 @@ to that prompt only. The note names the item and tells Claude how to load it.
 - The plugin names each hidden item one time per session.
 - The plugin checks only the prompts that you send. Background notifications and messages from other sessions do
   not get a check.
-- The status line shows the named items, for example `scope: pointed to datadog`.
+- The status line shows the named items, for example `loadout: pointed to datadog`.
 
 If the plugin does not name an item, Claude can still find it. Claude searches with ToolSearch for a tool, and with
 SearchSkills for a skill.

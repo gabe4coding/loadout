@@ -1,6 +1,6 @@
 ---
 title: Installation
-description: Install context-scope in Claude Code, check that it works, and keep it up to date.
+description: Install loadout in Claude Code, check that it works, and keep it up to date.
 ---
 
 # Installation
@@ -16,32 +16,32 @@ description: Install context-scope in Claude Code, check that it works, and keep
 Type these commands at the prompt of a Claude Code session:
 
 ```
-/plugin marketplace add gabe4coding/dynamic-profiles
-/plugin install context-scope@dynamic-profiles
+/plugin marketplace add gabe4coding/loadout
+/plugin install loadout@loadout
 ```
 
-Then start a new session. The plugin scopes a session from its first prompt.
+Then start a new session. The plugin picks the loadout of a session from its first prompt.
 
 You can also install from a shell:
 
 ```bash
-claude plugin marketplace add gabe4coding/dynamic-profiles
+claude plugin marketplace add gabe4coding/loadout
 ```
 
 ```bash
-claude plugin install context-scope@dynamic-profiles --scope user
+claude plugin install loadout@loadout --scope user
 ```
 
 ## Check that it works
 
 1. Start a new session.
 2. Write a prompt for a narrow task, for example a change to one file.
-3. Type `/scope`.
+3. Type `/loadout`.
 
 The command lists the tool groups and skills that the plugin kept and hid. The status line also shows a count, for
-example `scope: hid 6 tool groups, 70 skills`.
+example `loadout: hid 6 tool groups, 70 skills`.
 
-If `/scope` is not in the command list, the plugin did not load. See
+If `/loadout` is not in the command list, the plugin did not load. See
 [The plugin does not load](./troubleshooting.mdx#the-plugin-does-not-load).
 
 ## Run from a local folder
@@ -49,17 +49,17 @@ If `/scope` is not in the command list, the plugin did not load. See
 To try a change, load the plugin from a clone:
 
 ```bash
-claude --plugin-dir /path/to/dynamic-profiles
+claude --plugin-dir /path/to/loadout
 ```
 
 To use a clone in every session, add the clone as a marketplace and install from it:
 
 ```bash
-claude plugin marketplace add /path/to/dynamic-profiles
+claude plugin marketplace add /path/to/loadout
 ```
 
 ```bash
-claude plugin install context-scope@dynamic-profiles --scope user
+claude plugin install loadout@loadout --scope user
 ```
 
 Claude Code then reads the plugin from the clone. After you change a file, run `/reload-plugins` in an open
@@ -68,7 +68,7 @@ session.
 ## Update
 
 ```bash
-claude plugin update context-scope@dynamic-profiles
+claude plugin update loadout@loadout
 ```
 
 Then run `/reload-plugins` in each open session, or start a new session.
@@ -76,5 +76,5 @@ Then run `/reload-plugins` in each open session, or start a new session.
 ## Uninstall
 
 ```bash
-claude plugin uninstall context-scope@dynamic-profiles
+claude plugin uninstall loadout@loadout
 ```

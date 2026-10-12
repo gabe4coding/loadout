@@ -46,11 +46,11 @@ from the prompt cache only while it does not change.
 For this reason, the plugin changes the listings one time, before the first request. A later prompt never changes
 them. The plugin uses a note on that prompt instead, which adds to the end of the conversation.
 
-`/scope off` and `/scope on` change the listings. The request after a switch cannot use the cache.
+`/loadout off` and `/loadout on` change the listings. The request after a switch cannot use the cache.
 
 ## Subagents
 
-A subagent gets its own listings. The plugin gives it the same scope as the main session. The classifier does not
+A subagent gets its own listings. The plugin gives it the same loadout as the main session. The classifier does not
 run again for it.
 
 ## Data sent to Haiku

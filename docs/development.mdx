@@ -12,7 +12,7 @@ The full repo is the plugin. Claude Code loads the hooks module from `hooks/hook
 | Path | What it contains |
 | --- | --- |
 | `.claude-plugin/` | The plugin manifest (`plugin.json`) and the marketplace manifest. |
-| `hooks/register.ts` | The hooks, the classifier calls, the notes for later prompts and `/scope`. |
+| `hooks/register.ts` | The hooks, the classifier calls, the notes for later prompts and `/loadout`. |
 | `hooks/scope.ts` | Pure helpers: parse a listing, group its items, rebuild it with a note. |
 | `types/index.d.ts` | The state that the plugin keeps for a session. |
 | `tests/` | The tests of the hooks, the checks for docs and versions, and a smoke test with real Claude Code. |
@@ -61,7 +61,7 @@ node tests/smoke.e2e.mjs
 
 The test sends two prompts in one session. It checks these results:
 
-1. The plugin scopes the first tool listing, so Claude Code builds it after the first prompt.
+1. The plugin changes the first tool listing, so Claude Code builds it after the first prompt.
 2. The classifier keeps the tracker tools and hides the weather tools.
 3. The plugin removes the instructions of the weather server.
 4. The second prompt asks for the weather. It gets a note that names the weather tools.
@@ -93,7 +93,7 @@ login.
 1. Install the plugin from your clone. See [Run from a local folder](./installation.mdx#run-from-a-local-folder).
 2. Change a file.
 3. Run `/reload-plugins` in an open session, or start a new session.
-4. Type `/scope` to see the result.
+4. Type `/loadout` to see the result.
 
 ## Release
 

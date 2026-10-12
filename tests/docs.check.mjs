@@ -142,7 +142,7 @@ const tests = {
     assert.equal(slug('Speed, and results!'), 'speed-and-results')
   },
   'the checks catch each rule': () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'context-scope-docs-'))
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'loadout-docs-'))
     const doc = path.join(dir, 'x.mdx')
     const long = `${Array(26).fill('word').join(' ')}.`
     fs.writeFileSync(doc, `---\ntitle: X\ndescription: Y\n---\n\n# Z\n\nIt's here; you should just look, e.g. now.\n\n${long}\n\n\`code; should\` is fine.\n`)
