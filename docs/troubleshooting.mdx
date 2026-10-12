@@ -79,6 +79,6 @@ The trace contains names and counts only, not the text of your prompts.
   system prompt). If this occurs on the request where the effort changes, the plugin keeps that effort for the rest of
   the session.
 - With `modelForSession` on, Claude Code still plans the context and the reply length for the model of the session.
-  A smaller model can have lower limits, so a very long session can fail. If this occurs, run `/loadout off` or
-  `/model`. The plugin then keeps the model of the session.
+  A smaller model can have lower limits, so a very long session can fail. If this occurs, run `/loadout model off`
+  or `/model`. The plugin then keeps the model of the session.
 - The plugin uses the hooks module API of Claude Code. A new Claude Code release can change this API.

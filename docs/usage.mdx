@@ -100,6 +100,20 @@ Type `/loadout off`. The next request has the full listings again. Type `/loadou
 
 Each switch changes the listings. The next request thus cannot use the prompt cache. Do not switch often.
 
+## Switch the effort or the model for a session
+
+These commands change the setting for the current session only. Your settings do not change.
+
+| Command | Result |
+| --- | --- |
+| `/loadout effort on` | The plugin picks the effort for each prompt, from the next prompt. |
+| `/loadout effort off` | The next prompts use the effort of the session. |
+| `/loadout model on` | The plugin picks the model from the first prompt. After the first prompt, this does nothing. |
+| `/loadout model off` | The next requests go to the model of the session. The cache is built again one time. |
+
+`/loadout` shows the setting for this session. A new session or `/clear` starts again with your settings. If the
+effort is fixed (see above), `/loadout effort off` keeps it, to keep the cache valid.
+
 ## Later prompts
 
 The listings do not change after the first request. If a later prompt needs a hidden item, the plugin adds a note

@@ -311,7 +311,10 @@ test('keeps the effort for the session once a change lost the cache', { options:
   await $.prompt.submit({ text: 'And rename it', wait: false, origin: COMPOSER } as never)
   await step($, 't3')
 
-  expect(sent).toEqual(['low', 'medium', 'medium'])
+  await $.command.run(run('effort off'))
+  await step($, 't4')
+
+  expect(sent).toEqual(['low', 'medium', 'medium', 'medium'])
   expect((await $.command.run(run(''))).text).toContain('Effort: medium (fixed')
 })
 
@@ -459,6 +462,47 @@ test('asks nothing when the picked model is not smaller than the session model',
   await $.prompt.submit({ text: 'Redesign the storage layer', wait: false, origin: COMPOSER } as never)
 
   expect(asked).toEqual([])
+})
+
+test('/loadout effort on and off switch the effort for this session', async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on)
+  const sent = requests(on)
+  picks(on, () => 'low')
+
+  expect((await $.command.run(run(''))).text).toContain('Effort for each prompt: off, Model for the session: off')
+  expect((await $.command.run(run('effort on'))).text).toContain('is on')
+  await $.prompt.submit({ text: 'What does this function return?', wait: false, origin: COMPOSER } as never)
+  await step($, 't1')
+  await $.command.run(run('effort off'))
+  await $.prompt.submit({ text: 'And this one?', wait: false, origin: COMPOSER } as never)
+  await step($, 't2')
+
+  expect(sent).toEqual(['low', 'high'])
+  expect((await $.command.run(run(''))).text).not.toContain('Effort: low')
+  expect((await $.command.run(run('effort'))).text).toContain('Type "/loadout effort on"')
+})
+
+test('/loadout model on before the first prompt, and off later', async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on)
+  const asked = routed(on, 'haiku', 'Use')
+  const draw = footer(on)
+  const models = requests(on, undefined, e => e.model)
+
+  await $.command.run(run('model on'))
+  await $.prompt.submit({ text: 'What is 2+2?', wait: false, origin: COMPOSER } as never)
+  await step($, 't1', { model: 'claude-opus-5-5' })
+  expect((await $.command.run(run('model off'))).text).toContain('is off')
+  expect(await draw($)).toEqual(['focus'])
+  await step($, 't2', { model: 'claude-opus-5-5' })
+  expect((await $.command.run(run('model on'))).text).toContain('first prompt only')
+  await step($, 't3', { model: 'claude-opus-5-5' })
+
+  expect(asked.length).toBe(1)
+  expect(models).toEqual(['claude-haiku-5-5', 'claude-opus-5-5', 'claude-opus-5-5'])
 })
 
 test('leaves the effort alone when effortPerPrompt is off', async ($, on) => {

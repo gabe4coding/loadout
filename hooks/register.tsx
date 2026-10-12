@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, ToolInfo, TurnStepResult } from 'claude-code'
 
-import type { Choice, Effort, Offer, Route, ServerFact, SkillFact } from '../types'
+import type { Choice, Effort, Offer, Route, ServerFact, SkillFact, Switches } from '../types'
 import {
   flipKeep,
   capEffort,
@@ -42,6 +42,7 @@ const surfaced = atom({ plugin: 'loadout', key: 'surfaced' } as const, [])
 const recent = atom({ plugin: 'loadout', key: 'recent' } as const, [])
 const effort = atom({ plugin: 'loadout', key: 'effort' } as const, { level: null, isFrozen: false })
 const route = atom({ plugin: 'loadout', key: 'route' } as const, null)
+const switches = atom({ plugin: 'loadout', key: 'switches' } as const, {})
 const pinned = atom({ plugin: 'loadout', key: 'pinned' } as const, [])
 const marks = atom({ plugin: 'loadout', key: 'marks' } as const, null)
 const skillNames = atom({ plugin: 'loadout', key: 'skillNames' } as const, [])
@@ -156,8 +157,7 @@ export const register: Register = (on, options) => {
   const file = typeof options.traceFile === 'string' ? options.traceFile : ''
   const alwaysKeep = typeof options.alwaysKeep === 'string' ? parseKeep(options.alwaysKeep) : []
   const checksTask = options.newTaskNote !== false
-  const setsEffort = options.effortPerPrompt === true
-  const setsModel = options.modelForSession === true
+  const defaults: Switches = { effort: options.effortPerPrompt === true, model: options.modelForSession === true }
 
   on('session.start', async ($, e, next) => {
     // A new session (also after /clear) starts with no effort history.
@@ -165,7 +165,7 @@ export const register: Register = (on, options) => {
     last = null
     await $.command.register({
       name: 'loadout',
-      description: 'Show the loadout of this session. Also: list, pick, keep <name>, unkeep <name>, off, on',
+      description: 'Show the loadout of this session. Also: list, pick, keep <name>, unkeep <name>, off, on, effort on|off, model on|off',
     })
     return next(e)
   })
@@ -185,8 +185,9 @@ export const register: Register = (on, options) => {
       await update($, prompt, () => text.slice(0, 4000))
     }
     if (!isPerson(e.origin.kind)) return next(e)
+    const { effort: setsEffort, model: setsModel } = await uses($, defaults)
     // The window keeps the prompts sent while the loadout is off too.
-    const window = checksTask || setsEffort ? await remember($, text) : []
+    const window = await remember($, text)
     if (await read($, isOff)) return next(e)
     if (setsEffort && !(await read($, effort)).isFrozen) picking = pickEffort($, file, text, window)
     if (isFirst) {
@@ -212,11 +213,14 @@ export const register: Register = (on, options) => {
   // session's own effort, and only on a model that takes the effort in a
   // message: there a change keeps the cache.
   on('turn.step', async function* ($, e, next) {
-    if (e.agentId !== undefined || (!setsModel && !setsEffort)) return yield* next(e)
+    if (e.agentId !== undefined) return yield* next(e)
+    const [{ effort: setsEffort, model: setsModel }, { isFrozen }] = await Promise.all([uses($, defaults), read($, effort)])
+    // A fixed effort stays when the switch is off, to keep the cache.
+    if (!setsModel && !setsEffort && !isFrozen) return yield* next(e)
     const model = setsModel ? await modelFor($, e.model).catch(() => null) : null
     const base = model === null ? e : { ...e, model }
-    if (!setsEffort || e.effort === undefined || !takesTurnEffort(base.model)) return yield* next(base)
-    const level = await effortFor($).catch(() => null)
+    if (e.effort === undefined || !takesTurnEffort(base.model)) return yield* next(base)
+    const level = await effortFor($, setsEffort).catch(() => null)
     const sent = (level === null ? null : capEffort(level, e.effort)) ?? e.effort
     const result = yield* next(sent === e.effort ? base : { ...base, effort: sent })
     await watchCache($, file, String(sent), result).catch(() => undefined)
@@ -292,6 +296,7 @@ export const register: Register = (on, options) => {
       // The kind of a typed name is not known: a skill or a server.
       return { text: await setMark($, alwaysKeep, name, ['skills', 'tools'], word === 'keep') }
     }
+    if (word === 'effort' || word === 'model') return { text: await toggle($, word, rest) }
     if (word === 'list') return { text: listText(await items($, null), await keepNow($, alwaysKeep)) }
     if (word === 'pick') {
       const held = await readMarks($)
@@ -299,7 +304,7 @@ export const register: Register = (on, options) => {
       const { isPlaced } = await $.ui.open({ id: PANE, title: 'loadout: always keep', focus: true, closeOnEscape: true })
       return { text: isPlaced ? 'Opened the always-keep picker.' : 'No surface shows the picker here. Use "/loadout list" and "/loadout keep <name>".' }
     }
-    return { text: await summary($) }
+    return { text: await summary($, defaults) }
   })
 
   // Each opening of the picker reads the facts once, so a draw on each key of
@@ -571,6 +576,31 @@ async function modelFor($: EngineInterface, model: string): Promise<string | nul
   return null
 }
 
+// The effort and model changes: the option, unless /loadout switched them
+// for this session.
+async function uses($: EngineInterface, defaults: Switches): Promise<Switches> {
+  return { ...defaults, ...(await read($, switches)) }
+}
+
+const SWITCH = {
+  effort: { name: 'Effort for each prompt', on: 'from the next prompt', off: 'from the next prompt' },
+  model: { name: 'Model for the session', on: 'from the first prompt', off: 'from the next request' },
+} as const
+
+// `/loadout effort|model on|off`: sets the change for this session.
+async function toggle($: EngineInterface, which: keyof Switches, words: string[]): Promise<string> {
+  const [word] = words
+  if ((word !== 'on' && word !== 'off') || words.length > 1) return `Type "/loadout ${which} on" or "/loadout ${which} off".`
+  const { name } = SWITCH[which]
+  // The model comes from the first prompt only: once it is sent, "on" waits for a new session.
+  if (which === 'model' && word === 'on' && (await read($, prompt)) !== null) {
+    return `${name} picks the model from the first prompt only. Start a new session or run /clear, then type "/loadout model on" before the first prompt.`
+  }
+  await update($, switches, now => ({ ...now, [which]: word === 'on' }))
+  if (which === 'model' && word === 'off') await endRoute($)
+  return `${name} is ${word} for this session, ${SWITCH[which][word]}.`
+}
+
 async function endRoute($: EngineInterface): Promise<void> {
   if ((await read($, route)) === null) return
   await update($, route, () => null)
@@ -586,13 +616,14 @@ async function pickEffort($: EngineInterface, file: string, text: string, earlie
 }
 
 // The effort for a main request: the pick of the newest prompt once it is
-// there, else the one before. Null when the plugin leaves the effort alone.
-async function effortFor($: EngineInterface): Promise<Effort | null> {
+// there, else the one before. Null when the plugin leaves the effort alone:
+// switched off, unless a fixed effort keeps the cache.
+async function effortFor($: EngineInterface, isOn: boolean): Promise<Effort | null> {
   const pending = picking
   picking = null
   const [state, off] = await Promise.all([read($, effort), read($, isOff)])
   if (state.isFrozen) return state.level
-  if (off) return null
+  if (off || !isOn) return null
   const picked = pending === null ? null : await pending
   if (picked === null || picked === state.level) return state.level
   await update($, effort, now => ({ ...now, level: picked }))
@@ -757,11 +788,12 @@ async function classify(
   return parseKept(reply.text, groups)
 }
 
-async function summary($: EngineInterface): Promise<string> {
+async function summary($: EngineInterface, defaults: Switches): Promise<string> {
   if (await read($, isOff)) return 'loadout is off for this session.'
-  const [t, s] = [await read($, tools), await read($, skills)]
+  const [t, s, now] = [await read($, tools), await read($, skills), await uses($, defaults)]
+  const switchLine = (Object.keys(SWITCH) as (keyof Switches)[]).map(which => `${SWITCH[which].name}: ${now[which] ? 'on' : 'off'}`).join(', ')
   if (t === null && s === null) {
-    return ['loadout has not picked a loadout for this session yet. Send a prompt first.', ...modelLine(await read($, route)), ...effortLine(await read($, effort))].join('\n')
+    return ['loadout has not picked a loadout for this session yet. Send a prompt first.', switchLine, ...modelLine(await read($, route)), ...effortLine(await read($, effort), now.effort)].join('\n')
   }
   // No tool decision: the session has no ToolSearch or no MCP tools.
   const toolLines = t === null
@@ -773,8 +805,9 @@ async function summary($: EngineInterface): Promise<string> {
     `Skills kept: ${s?.kept.join(', ') || 'none'}`,
     `Skills hidden: ${s?.hidden.length ?? 0}`,
     `Named to later prompts: ${(await read($, surfaced)).join(', ') || 'none'}`,
+    switchLine,
     ...modelLine(await read($, route)),
-    ...effortLine(await read($, effort)),
+    ...effortLine(await read($, effort), now.effort),
   ].join('\n')
 }
 
@@ -782,7 +815,7 @@ function modelLine(state: Route | null): string[] {
   return state === null ? [] : [`Model: ${state.to} (the session's model: ${state.from})`]
 }
 
-function effortLine(state: { level: string | null; isFrozen: boolean }): string[] {
-  if (state.level === null) return []
+function effortLine(state: { level: string | null; isFrozen: boolean }, isOn: boolean): string[] {
+  if (state.level === null || (!isOn && !state.isFrozen)) return []
   return [`Effort: ${state.level}${state.isFrozen ? ' (fixed: a change lost the prompt cache on this model)' : ''}`]
 }

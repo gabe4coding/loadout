@@ -14,6 +14,9 @@ export type ModelTier = 'haiku' | 'sonnet' | 'opus' | 'fable'
 // on the session's model `from` go to `to`.
 export type Route = { from: string; to: string }
 
+// The effort and model changes, on or off.
+export type Switches = { effort: boolean; model: boolean }
+
 // The effort the plugin sets on the main requests. `level` is the latest pick,
 // null before the first. `isFrozen` is true once a change lost the cache: the
 // effort then stays for the rest of the session.
@@ -40,6 +43,9 @@ declare module 'claude-code' {
       recent: string[]
       effort: EffortState
       route: Route | null
+      // `/loadout effort|model on|off` for this session; a missing key leaves
+      // it to the option.
+      switches: Partial<Switches>
       // The alwaysKeep names as the first prompt found them. A server that
       // connects later in the session gets the same names.
       pinned: string[]
