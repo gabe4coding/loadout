@@ -33,6 +33,28 @@ The plugin changes only the three listings. These parts stay as they are:
 - `CLAUDE.md`, memory and the system prompt.
 - The tools that Claude Code always loads, which are not deferred.
 
+## See each decision
+
+Set the option `traceFile` to an absolute path. The plugin then writes one JSON line for each decision to this file.
+Add this entry to `~/.claude/settings.json`:
+
+```json
+{
+  "pluginConfigs": {
+    "context-scope": { "options": { "traceFile": "/tmp/context-scope.jsonl" } }
+  }
+}
+```
+
+| `event` | When | Fields |
+| --- | --- | --- |
+| `listing` | The plugin gets a tool listing or a skill listing | `type`, `isScoped`, `kept`, `hidden` |
+| `mcp_instructions` | The plugin gets the MCP server instructions | `where`, `removed` |
+| `recall` | The plugin checks a later prompt | `named` |
+
+If `isScoped` is `false`, the plugin did not have the first prompt yet. It then kept the full listing. The trace
+contains names and counts only, not the text of your prompts.
+
 ## Limits
 
 - The plugin scopes a session from its first prompt only. A task that changes direction keeps the first scope.

@@ -119,11 +119,13 @@ function note(dropped: Entry[], kind: 'tools' | 'skills'): string {
   return `(context-scope hid ${dropped.length} more deferred tools that look unrelated to this task, from: ${groups}. They still work: ToolSearch finds them by keyword.)`
 }
 
-// Drops "## <server>" blocks of the MCP instructions for servers whose tools
-// were all hidden. A server it does not know stays.
+// Drops the "## <server>" blocks of the MCP instructions for the hidden
+// servers. A server it does not know stays.
 export function trimMcpInstructions(text: string, hiddenGroups: ReadonlySet<string>): string {
-  const start = text.indexOf('# MCP Server Instructions')
-  if (start < 0 || hiddenGroups.size === 0) return text
+  // The system prompt section has this header. An attachment has the blocks
+  // alone.
+  const start = Math.max(0, text.indexOf('# MCP Server Instructions'))
+  if (hiddenGroups.size === 0) return text
   const before = text.slice(0, start)
   const blocks = text.slice(start).split(/\n(?=## )/)
   const kept = blocks.filter(block => {
@@ -131,4 +133,11 @@ export function trimMcpInstructions(text: string, hiddenGroups: ReadonlySet<stri
     return !(block.startsWith('## ') && match?.[1] && hiddenGroups.has(normalize(match[1])))
   })
   return before + kept.join('\n')
+}
+
+// The "## <server>" headers of `before` that `after` lacks.
+export function removedServers(before: string, after: string): string[] {
+  const headers = (text: string) => [...text.matchAll(/^## (.+)$/gm)].map(match => match[1] ?? '')
+  const kept = new Set(headers(after))
+  return headers(before).filter(header => !kept.has(header))
 }

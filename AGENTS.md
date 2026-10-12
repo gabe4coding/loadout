@@ -9,6 +9,8 @@ gets a note when it needs a hidden item. The whole repo is the plugin (marketpla
 - Hooks, Haiku calls, `/scope`, session state → `hooks/register.ts`. Parse and rebuild of listings (pure, no `$`)
   → `hooks/scope.ts`. State contract → `types/index.d.ts`.
 - Behaviour end to end → `docs/how-it-works.mdx`. Known limits → `docs/troubleshooting.mdx`.
+- What real Claude Code does (event order, origins) → `tests/smoke.e2e.mjs` and its trace. Run it before you trust
+  an assumption about the engine.
 - The engine API (`$`, events, `claude-code/testing`) → `.claude-plugin/types/claude-code/index.d.ts`. Claude Code
   writes it when the plugin loads with `--plugin-dir`. It is not in git.
 

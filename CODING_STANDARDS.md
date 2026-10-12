@@ -16,6 +16,11 @@ enforces; the others rely on discipline.
   conversation. A later prompt gets a note through `prompt.submit` context instead.
 - On any failure (Haiku call, parse, timeout) keep every item. Never let a failure hide an item.
 - A guard hook (`prompt.submit`) has a `.catch` that passes the event on, so a failure never drops a prompt.
+- Do not depend on the order of the listings. Claude Code can raise the MCP instructions before the tool listing:
+  `trimmed` then classifies the tool groups from `$.tool.list()`, and the tool listing reuses the decision.
+  `[test: smoke.e2e.mjs]`
+- Write one trace line for each decision that a smoke check reads. A trace line holds names and counts, never
+  prompt text.
 
 ## Tests and commits
 - Before every commit, run all three checks. `[test: CI runs all three]`
@@ -23,6 +28,11 @@ enforces; the others rely on discipline.
   - `claude plugin test .`: the hooks against a fake host (`tests/*.test.ts`). Mock `model.complete` there: the
     test kit has no model.
   - `node tests/docs.check.mjs`: the doc rules below.
+- `node tests/smoke.e2e.mjs`: real `claude -p` with the plugin and two fake MCP servers, two prompts in one
+  session. It needs a login and costs API usage, so it is not one of the three checks and CI does not run it. Run it
+  after a change to `hooks/`, before a release, and after you raise the pinned Claude Code version. Its checks read
+  the trace file (`traceFile` option) and the fake servers' calls, never the words of the model: the transcript keeps
+  a listing as Claude Code made it, not as the plugin answered it.
 - Write a test for each behaviour change. A test that needs `ui.status` or `ui.invalidate` registers the `quiet`
   hooks in `tests/context-scope.test.ts`: the kit has no implementation for them.
 - CI (`.github/workflows/test.yml`) pins the Claude Code version for `claude plugin test .`, and a weekly job runs

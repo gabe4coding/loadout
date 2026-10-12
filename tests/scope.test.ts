@@ -26,3 +26,8 @@ test('keeps the MCP instructions of a server it does not know', () => {
   expect(out).not.toContain('A')
   expect(out).toContain('B')
 })
+
+test('trims MCP instructions that come as blocks with no header', () => {
+  const out = trimMcpInstructions('## datadog\nA\n\n## other\nB', new Set(['datadog']))
+  expect(out).toBe('## other\nB')
+})

@@ -15,7 +15,7 @@ The full repo is the plugin. Claude Code loads the hooks module from `hooks/hook
 | `hooks/register.ts` | The hooks, the classifier calls, the notes for later prompts and `/scope`. |
 | `hooks/scope.ts` | Pure helpers: parse a listing, group its items, rebuild it with a note. |
 | `types/index.d.ts` | The state that the plugin keeps for a session. |
-| `tests/` | The tests of the hooks and the checks for docs and versions. |
+| `tests/` | The tests of the hooks, the checks for docs and versions, and a smoke test with real Claude Code. |
 | `docs/` | The user docs. |
 
 ## Checks
@@ -47,6 +47,34 @@ CI (`.github/workflows/test.yml`) runs the three checks for each push to `main` 
 - For each pull request, it runs `tests/version.check.mjs`. This check fails if the plugin changed and its version
   did not increase.
 
+### Smoke test
+
+The smoke test runs real headless Claude Code with this plugin and two fake MCP servers. One server is for the task
+of the first prompt. The other server has weather tools, which the task does not need. The other tests replace
+Claude Code and the classifier with fakes. This test runs all the parts together.
+
+Run it after a change to `hooks/`, before a release, and after you increase the Claude Code version:
+
+```bash
+node tests/smoke.e2e.mjs
+```
+
+The test sends two prompts in one session. It checks these results:
+
+1. The plugin scopes the first tool listing, so Claude Code builds it after the first prompt.
+2. The classifier keeps the tracker tools and hides the weather tools.
+3. The plugin removes the instructions of the weather server.
+4. The second prompt asks for the weather. It gets a note that names the weather tools.
+5. Claude loads a weather tool with ToolSearch and calls it.
+
+- It needs a logged-in Claude Code. It costs API usage, less than $0.01 with Haiku. Use `--model` to change the model.
+- The checks read the trace file of the plugin and the calls to the fake servers. They do not read the reply of the
+  model.
+- If a check says that the model or the classifier did not do a step, run the test again. Both are models.
+- A failed run keeps its folder, with the transcript and the trace. The test prints the path. To keep the folder of a
+  run that passes, add `--keep`.
+- CI does not run the smoke test, because CI has no login.
+
 ## Type check
 
 To develop with the engine types in your editor, load the plugin one time with `claude --plugin-dir .`. Claude Code
@@ -71,7 +99,7 @@ login.
 
 1. Increase `version` in `.claude-plugin/plugin.json`. Claude Code caches a plugin by its version, so without a new
    version, users do not get the change.
-2. Run the three checks.
+2. Run the three checks and the smoke test.
 3. Optional: run `node tests/version.check.mjs` to do the version check of CI before you push.
 
 ## More

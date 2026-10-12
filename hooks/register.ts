@@ -10,6 +10,8 @@ import {
   rebuild,
   skillCatalog,
   toolCatalog,
+  toolGroup,
+  removedServers,
   trimMcpInstructions,
 } from './scope'
 import type { Listing } from './scope'
@@ -47,7 +49,28 @@ function choose($: EngineInterface, kind: Kind, listing: Listing): Promise<Choic
   return run
 }
 
-export const register: Register = on => {
+// The servers with a tool in the prompt's own list, not behind ToolSearch.
+// Their instructions always stay: Claude sees their tools.
+const front = new Set<string>()
+
+// One JSON line per decision when the traceFile option names a file. The
+// smoke test reads it: the transcript keeps a listing as the engine made it,
+// not as this plugin answered it. Writes run one at a time, so no line is lost.
+let traceQueue: Promise<unknown> = Promise.resolve()
+
+function trace($: EngineInterface, file: string, line: Record<string, unknown>): void {
+  if (file === '') return
+  traceQueue = traceQueue
+    .then(async () => {
+      const before = await $.fs.read(file).catch(() => '')
+      await $.fs.write(file, `${before}${JSON.stringify(line)}\n`)
+    })
+    .catch(() => undefined)
+}
+
+export const register: Register = (on, options) => {
+  const file = typeof options.traceFile === 'string' ? options.traceFile : ''
+
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'scope',
@@ -67,38 +90,61 @@ export const register: Register = on => {
       return next(e)
     }
     if ((await read($, isOff)) || !isPerson(e.origin.kind)) return next(e)
-    const notes = await recall($, text)
-    return notes.length === 0 ? next(e) : next({ ...e, context: [...(e.context ?? []), ...notes] })
+    const picked = await recall($, text)
+    trace($, file, { event: 'recall', named: picked.map(offer => offer.group) })
+    if (picked.length === 0) return next(e)
+    return next({ ...e, context: [...(e.context ?? []), ...recallNotes(picked)] })
   }).catch(($, e, next) => next(e))
 
   on('prompt.attachment', { type: 'deferred_tools_delta' }, async ($, e, next) => {
     const base = await next(e)
-    if (base.text === null || (await isSkipped($))) return base
+    if (base.text === null || (await isSkipped($))) {
+      trace($, file, { event: 'listing', type: e.type, isScoped: false })
+      return base
+    }
     const listing = parseTools(base.text)
     const choice = await choose($, 'tools', listing)
     $.ui.invalidate('prompt.section')
-    return { text: rebuild(listing, choice.kept, 'tools').text }
+    const out = rebuild(listing, choice.kept, 'tools')
+    trace($, file, { event: 'listing', type: e.type, isScoped: true, kept: choice.kept, hidden: out.hidden })
+    return { text: out.text }
   })
 
   on('prompt.attachment', { type: 'skill_listing' }, async ($, e, next) => {
     const base = await next(e)
-    if (base.text === null || (await isSkipped($))) return base
+    if (base.text === null || (await isSkipped($))) {
+      trace($, file, { event: 'listing', type: e.type, isScoped: false })
+      return base
+    }
     const listing = parseSkills(base.text)
     const choice = await choose($, 'skills', listing)
-    return { text: rebuild(listing, choice.kept, 'skills').text }
+    const out = rebuild(listing, choice.kept, 'skills')
+    trace($, file, { event: 'listing', type: e.type, isScoped: true, kept: choice.kept, hidden: out.hidden })
+    return { text: out.text }
+  })
+
+  on('tool.describe', async ($, e, next) => {
+    const described = await next(e)
+    const isDeferred = described.isDeferred ?? e.isDeferred === true
+    if (e.tool.startsWith('mcp__') && !isDeferred) front.add(toolGroup(e.tool))
+    return described
   })
 
   // The MCP server instructions, in the system prompt or as an attachment.
   on('prompt.section', async ($, e, next) => {
     const base = await next(e)
     if (base.text === null || !base.text.includes('# MCP Server Instructions')) return base
-    return { text: await trimmed($, base.text) }
+    const text = await trimmed($, base.text)
+    trace($, file, { event: 'mcp_instructions', where: e.name, removed: removedServers(base.text, text) })
+    return { text }
   })
 
   on('prompt.attachment', { type: /mcp_instructions/ }, async ($, e, next) => {
     const base = await next(e)
     if (base.text === null) return base
-    return { text: await trimmed($, base.text) }
+    const text = await trimmed($, base.text)
+    trace($, file, { event: 'mcp_instructions', where: e.type, removed: removedServers(base.text, text) })
+    return { text }
   })
 
   on('command.run', { command: 'scope' }, async ($, e) => {
@@ -118,7 +164,7 @@ function isPerson(kind: string): boolean {
 }
 
 // Matches a later prompt against what is still hidden and not yet named.
-async function recall($: EngineInterface, text: string): Promise<string[]> {
+async function recall($: EngineInterface, text: string): Promise<Offer[]> {
   const named = new Set(await read($, surfaced))
   const open = (await read($, offers)).filter(offer => !named.has(offer.group))
   if (open.length === 0) return []
@@ -140,7 +186,7 @@ async function recall($: EngineInterface, text: string): Promise<string[]> {
 
   await update($, surfaced, list => [...list, ...picked.map(offer => offer.group)])
   $.ui.status(`scope: pointed to ${picked.map(offer => offer.group).join(', ')}`)
-  return recallNotes(picked)
+  return picked
 }
 
 function recallNotes(picked: Offer[]): string[] {
@@ -160,10 +206,18 @@ async function isSkipped($: EngineInterface): Promise<boolean> {
   return (await read($, isOff)) || (await read($, prompt)) === null
 }
 
+// Claude Code can raise the instructions before the tool listing. Then the
+// tool groups are classified here, from the MCP tools of the session, and the
+// tool listing reuses the decision.
 async function trimmed($: EngineInterface, text: string): Promise<string> {
-  const choice = await read($, tools)
-  if ((await read($, isOff)) || choice === null) return text
-  return trimMcpInstructions(text, new Set(choice.hidden))
+  if (await isSkipped($)) return text
+  const choice = (await read($, tools)) ?? (await choose($, 'tools', await mcpTools($)))
+  return trimMcpInstructions(text, new Set(choice.hidden.filter(group => !front.has(group))))
+}
+
+async function mcpTools($: EngineInterface): Promise<Listing> {
+  const names = (await $.tool.list()).filter(info => info.mcp).map(info => info.name)
+  return parseTools(names.join('\n'))
 }
 
 // Classifies only the groups not seen before, so a later delta (an MCP server
@@ -182,10 +236,12 @@ async function decide($: EngineInterface, kind: Kind, listing: Listing): Promise
   const dropped = catalog
     .filter(row => !kept.includes(row.group))
     .map(row => ({ kind, group: row.group, row: row.row }))
-  await update($, offers, list => [...list, ...dropped])
+  // Two decisions can run at once (the instructions and the tool listing), so
+  // a group can come twice. Keep one of each.
+  await update($, offers, list => [...list, ...dropped.filter(offer => !list.some(one => one.group === offer.group))])
   const choice: Choice = {
-    kept: [...before.kept, ...kept],
-    hidden: [...before.hidden, ...unseen.filter(group => !kept.includes(group))],
+    kept: [...new Set([...before.kept, ...kept])],
+    hidden: [...new Set([...before.hidden, ...unseen.filter(group => !kept.includes(group))])],
   }
   await writeChoice($, kind, choice)
   const [t, s] = [await read($, tools), await read($, skills)]

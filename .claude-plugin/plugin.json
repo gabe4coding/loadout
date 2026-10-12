@@ -1,9 +1,18 @@
 {
   "name": "context-scope",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Reads the first prompt of a session and hides the deferred tools, skills and MCP server instructions that the task does not need.",
   "types": "./types/index.d.ts",
   "author": {
     "name": "gpavanello"
+  },
+  "userConfig": {
+    "traceFile": {
+      "type": "string",
+      "title": "Trace file",
+      "description": "Absolute path of a file. If set, the plugin writes one JSON line for each decision. For tests and debugging.",
+      "default": "",
+      "required": false
+    }
   }
 }
