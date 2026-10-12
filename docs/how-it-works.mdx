@@ -18,12 +18,14 @@ of your own hooks.
 
 ## One session
 
-1. You send the first prompt. The plugin keeps its first 4,000 characters for the session.
-2. Claude Code builds the tool listing. The plugin groups the MCP tools by server and sends the groups to the
-   classifier with your prompt.
+1. You send the first prompt. The plugin keeps its first 4,000 characters for the session. It also keeps a copy of
+   the always-keep list.
+2. Claude Code builds the tool listing. The plugin groups the MCP tools by server. It keeps the groups on the
+   always-keep list and sends the other groups to the classifier with your prompt.
 3. The classifier replies with the groups to keep. The plugin removes the other groups from the listing and adds a
    note at the end.
-4. The plugin does the same for the skill listing. Each skill is its own item.
+4. The plugin does the same for the skill listing. Each skill is its own item. The classifier does not see the
+   skills on the always-keep list.
 5. The plugin removes the instruction block of each server whose tool group it hid. A block for a server that the
    plugin does not know stays.
 6. Claude reads the shorter listings and starts the task.
@@ -51,6 +53,9 @@ them. The plugin uses a note on that prompt instead, which adds to the end of th
 
 `/loadout off` and `/loadout on` change the listings. The request after a switch cannot use the cache.
 
+For the same reason, a change to the always-keep list does not change the session that is open. The session uses
+the copy of the list from its first prompt. The next session uses the new list.
+
 ## Subagents
 
 A subagent gets its own listings. The plugin gives it the same loadout as the main session. The classifier does not
@@ -62,11 +67,12 @@ The classifier sends these items to Haiku through the API client and login of Cl
 
 - The first 4,000 characters of the first prompt.
 - The names of the hidden-item candidates: up to 10 tool names for each server, and the first 160 characters of
-  each skill entry.
+  each skill entry. The items on the always-keep list are not candidates, so the plugin does not send them.
 - On a later prompt, its first 4,000 characters and the rows of the items that are still hidden.
 
-The plugin sends no file contents and no tool results. It stores nothing on disk. Its state lasts for the session
-only.
+The plugin sends no file contents and no tool results. It stores nothing on disk, except the always-keep names
+from `/loadout keep` and the pane. Claude Code keeps them in the storage of the plugin. The other state lasts for the
+session only.
 
 ## Failures
 

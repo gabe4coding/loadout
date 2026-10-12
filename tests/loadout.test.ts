@@ -1,6 +1,8 @@
 import type { On } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 
+import { parseTools } from '../hooks/scope'
+
 const TOOLS = [
   'The following deferred tools are now available via ToolSearch:',
   'CronCreate',
@@ -35,11 +37,11 @@ const ENGINE = { kind: 'engine' } as const
 // The MCP instructions as an attachment: the blocks, with no header.
 const BLOCKS = MCP.slice(MCP.indexOf('## datadog'))
 
-// The MCP tools as $.tool.list() gives them.
-const LISTED = [
-  { name: 'mcp__datadog__search_logs', description: 'Search logs', mcp: true },
-  { name: 'mcp__claude-in-chrome__navigate', description: 'Open a page', mcp: true },
-]
+// The MCP tools of TOOLS as $.tool.list() gives them.
+const LISTED = parseTools(TOOLS)
+  .entries.map(entry => entry.name)
+  .filter(name => name.startsWith('mcp__'))
+  .map(name => ({ name, description: '', mcp: true }))
 
 const SEARCH = { name: 'ToolSearch', description: 'Load deferred tools', mcp: false }
 
@@ -51,14 +53,38 @@ function listed(on: On, tools: object[] = [SEARCH, ...LISTED]): void {
 
 // A classifier that replies `text`.
 function answer(text: string) {
-  return answer(text)
+  return { value: { isAnswered: true, text, usage: { inputTokens: 1, outputTokens: 1 } } } as never
 }
 
-// The engine's own ui.status and ui.invalidate, which the kit leaves out.
+// The engine's own ui.status, ui.invalidate and ui.toast, which the kit
+// leaves out.
 function quiet(on: On): void {
   on('ui.status', () => ({ value: undefined }))
   on('ui.invalidate', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
 }
+
+// The plugin's store across sessions. Returns what it holds, for checks.
+function fakeStore(on: On, held: Record<string, unknown> = {}): Record<string, unknown> {
+  on('store.get', ($, e) => ({ value: held[e.key] }) as never)
+  on('store.set', ($, e) => {
+    held[e.key] = e.value
+    return { value: undefined }
+  })
+  return held
+}
+
+// The MCP tools of the session, as $.tool.list() answers.
+const COMPOSER = { kind: 'composer' } as const
+const run = (args: string) => ({ command: 'loadout', args, origin: COMPOSER, presentation: { isFullscreen: false, columns: 80 } }) as never
+// The always-keep picker on a surface that draws an Input.
+const pane = <S extends 'terminal' | 'desktop'>(surface: S) => ({
+  plugin: 'loadout',
+  surface,
+  component: 'Pane' as const,
+  requestId: 'loadout-keep',
+  props: { title: 'loadout', isFocused: true, bodyColumns: 80, placement: 'inline' } as never,
+})
 
 test('keeps only what the classifier picks, and says what it hid', async ($, on) => {
   on('prompt.submit', ($, e) => ({ text: e.text }))
@@ -122,15 +148,14 @@ test('names hidden tools a later prompt needs, once, without changing the lists'
     const text = newest === undefined ? 'claude_in_chrome' : newest.includes('logs') ? 'datadog' : 'none'
     return answer(text)
   })
-  const composer = { kind: 'composer' } as const
 
-  await $.prompt.submit({ text: 'Check the login page in the browser', wait: false, origin: composer } as never)
+  await $.prompt.submit({ text: 'Check the login page in the browser', wait: false, origin: COMPOSER } as never)
   const first = await $.prompt.attachment({ type: 'deferred_tools_delta', text: TOOLS, origin: ENGINE } as never)
   expect(first.text).not.toContain('mcp__datadog__search_logs')
 
-  await $.prompt.submit({ text: 'Rename this variable', wait: false, origin: composer } as never)
-  await $.prompt.submit({ text: 'Now look at the error logs for it', wait: false, origin: composer } as never)
-  await $.prompt.submit({ text: 'And the logs from yesterday', wait: false, origin: composer } as never)
+  await $.prompt.submit({ text: 'Rename this variable', wait: false, origin: COMPOSER } as never)
+  await $.prompt.submit({ text: 'Now look at the error logs for it', wait: false, origin: COMPOSER } as never)
+  await $.prompt.submit({ text: 'And the logs from yesterday', wait: false, origin: COMPOSER } as never)
 
   expect(seen[1]).toEqual([])
   expect(seen[2]?.join('\n')).toContain('datadog (2 tools): search_logs, get_trace')
@@ -188,7 +213,7 @@ test('classifies from the tool list when the instructions come first', async ($,
 // listing. Its group gets a decision of its own there, and the earlier ones stay.
 test('classifies a server that connects late from its instructions', async ($, on) => {
   const asked: string[] = []
-  const tools = [SEARCH, ...LISTED]
+  const tools = [SEARCH, ...LISTED.filter(tool => !tool.name.includes('slack'))]
   on('prompt.submit', ($, e) => ({ text: e.text }))
   on('prompt.attachment', ($, e) => ({ text: e.text }))
   quiet(on)
@@ -233,7 +258,93 @@ test('/loadout says that no tool group is hidden when the session has no ToolSea
 
   await $.prompt.submit({ text: 'Check the dependencies for a CVE', wait: false } as never)
   await $.prompt.attachment({ type: 'skill_listing', text: SKILLS, origin: ENGINE } as never)
-  const out = await $.command.run({ command: 'loadout', args: '' } as never)
+  const out = await $.command.run(run(''))
   expect(out.text).toContain('Tool groups hidden: none')
   expect(out.text).not.toContain('Tool groups kept: none')
+})
+
+test('never hides an always-kept item, and the classifier does not see it', { options: { alwaysKeep: 'local-tools update-config' } }, async ($, on) => {
+  fakeStore(on, { alwaysKeep: ['slack'] })
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  on('prompt.attachment', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on)
+  const asked: string[] = []
+  on('model.complete', ($, e) => {
+    asked.push(String(e.prompt))
+    return { value: { isAnswered: true, text: 'none', usage: { inputTokens: 1, outputTokens: 1 } } } as never
+  })
+
+  await $.prompt.submit({ text: 'Rename this variable', wait: false } as never)
+  const tools = await $.prompt.attachment({ type: 'deferred_tools_delta', text: TOOLS, origin: ENGINE } as never)
+  expect(tools.text).toContain('mcp__slack__send_message')
+  expect(tools.text).not.toContain('mcp__datadog__search_logs')
+
+  const skills = await $.prompt.attachment({ type: 'skill_listing', text: SKILLS, origin: ENGINE } as never)
+  expect(skills.text).toContain('local-tools:dep-scan')
+  expect(skills.text).toContain('update-config')
+  expect(skills.text).not.toContain('riff:title')
+
+  expect(asked.join('\n')).not.toContain('slack (')
+  expect(asked.join('\n')).not.toContain('dep-scan')
+  expect((await $.command.run(run(''))).text).toContain('Always kept: slack, local-tools:dep-scan, update-config')
+})
+
+test('/loadout keep and unkeep save the marks, and leave the option as it is', { options: { alwaysKeep: 'base' } }, async ($, on) => {
+  const store = fakeStore(on, { alwaysKeep: ['retro'] })
+  const say = async (args: string) => (await $.command.run(run(args))).text
+
+  expect(await say('keep kb-search')).toContain('Always keep: base, retro, kb-search.')
+  expect(await say('keep kb-search')).toContain('already')
+  expect(await say('keep base')).toContain('already')
+  expect(await say('unkeep retro')).toContain('Always keep: base, kb-search.')
+  expect(await say('unkeep base')).toContain('the option alwaysKeep in your settings covers it')
+  expect(await say('unkeep nothing')).toContain('not on the always-keep list')
+  expect(await say('keep a,b')).toContain('one skill, plugin or server name')
+  expect(store.alwaysKeep).toEqual(['kb-search'])
+})
+
+test('/loadout list shows every item with its mark and its state', { options: { alwaysKeep: 'riff' } }, async ($, on) => {
+  fakeStore(on)
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  on('prompt.attachment', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on)
+  on('model.complete', () => ({ value: { isAnswered: true, text: 'datadog', usage: { inputTokens: 1, outputTokens: 1 } } }) as never)
+
+  await $.prompt.submit({ text: 'Look at the error logs', wait: false } as never)
+  await $.prompt.attachment({ type: 'deferred_tools_delta', text: TOOLS, origin: ENGINE } as never)
+  await $.prompt.attachment({ type: 'skill_listing', text: SKILLS, origin: ENGINE } as never)
+
+  const text = (await $.command.run(run('list'))).text
+  expect(text).toContain('[ ] datadog  (kept)')
+  expect(text).toContain('[ ] slack  (hidden)')
+  expect(text).toContain('[x] riff:title  (kept)')
+})
+
+test('the picker lists the skills and flips a mark on a press', async ($, on) => {
+  on('prompt.attachment', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on)
+  const store = fakeStore(on, { alwaysKeep: ['riff'] })
+  await $.prompt.attachment({ type: 'skill_listing', text: SKILLS, origin: ENGINE } as never)
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount(pane(surface))
+    await ui.input({ key: 'filter', text: '', kind: 'change' })
+    expect(JSON.stringify(await ui.drawn())).toContain('update-config')
+    await ui.input({ key: 'filter', text: 'riff', kind: 'change' })
+    const drawn = JSON.stringify(await ui.drawn())
+    expect(drawn).toContain('[x] ')
+    expect(drawn).not.toContain('update-config')
+    await ui.unmount()
+  }
+  const ui = await $.ui.mount(pane('terminal'))
+  await ui.input({ key: 'filter', text: '', kind: 'change' })
+  expect(JSON.stringify(await ui.drawn())).toContain('tools:datadog')
+  await ui.press({ key: 'skills:update-config' })
+  expect(store.alwaysKeep).toEqual(['riff', 'update-config'])
+  await ui.press({ key: 'skills:riff:title' })
+  expect(store.alwaysKeep).toEqual(['update-config'])
+  expect(JSON.stringify(await ui.drawn())).toContain('Always keep: update-config')
 })

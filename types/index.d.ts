@@ -1,5 +1,6 @@
-// What the classifier kept for one listing; `hidden` are the names cut out.
-export type Choice = { kept: string[]; hidden: string[] }
+// What the classifier kept for one listing; `hidden` are the names cut out,
+// `always` the kept names that the alwaysKeep option covered.
+export type Choice = { kept: string[]; hidden: string[]; always: string[] }
 
 // One hidden tool group or skill, with the catalog row a later prompt is
 // matched against.
@@ -14,6 +15,17 @@ declare module 'claude-code' {
       isOff: boolean
       offers: Offer[]
       surfaced: string[]
+      // The alwaysKeep names as the first prompt found them. A server that
+      // connects later in the session gets the same names.
+      pinned: string[]
+      // A copy of the marks that /loadout keep and the pane saved in $.store;
+      // null until the session reads or writes them.
+      marks: string[] | null
+      // The skill names of a listing that the plugin did not scope, for
+      // /loadout list and the pane. A scoped listing records them in `skills`.
+      skillNames: string[]
+      // The text of the pane's filter field.
+      filter: string
     }
   }
 }
