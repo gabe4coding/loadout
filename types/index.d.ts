@@ -22,6 +22,8 @@ declare module 'claude-code' {
       isOff: boolean
       offers: Offer[]
       surfaced: string[]
+      // The last prompts of the person, newest last, for the new-task check.
+      recent: string[]
       // The alwaysKeep names as the first prompt found them. A server that
       // connects later in the session gets the same names.
       pinned: string[]

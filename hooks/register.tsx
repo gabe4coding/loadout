@@ -4,6 +4,7 @@ import type { EngineInterface, Register, ToolInfo } from 'claude-code'
 import type { Choice, Offer, ServerFact, SkillFact } from '../types'
 import {
   flipKeep,
+  isNewTask,
   groupsOf,
   isAlwaysKept,
   mcpTools,
@@ -33,6 +34,7 @@ const skills = atom({ plugin: 'loadout', key: 'skills' } as const, null)
 const isOff = atom({ plugin: 'loadout', key: 'isOff' } as const, false)
 const offers = atom({ plugin: 'loadout', key: 'offers' } as const, [])
 const surfaced = atom({ plugin: 'loadout', key: 'surfaced' } as const, [])
+const recent = atom({ plugin: 'loadout', key: 'recent' } as const, [])
 const pinned = atom({ plugin: 'loadout', key: 'pinned' } as const, [])
 const marks = atom({ plugin: 'loadout', key: 'marks' } as const, null)
 const skillNames = atom({ plugin: 'loadout', key: 'skillNames' } as const, [])
@@ -57,6 +59,22 @@ const RECALL = [
   'Given its newest prompt, pick the hidden ones it clearly needs for that prompt.',
   'Reply with their ids, one per line, or the word none. Pick few: only clear needs.',
 ].join('\n')
+
+// Added to RECALL when there are earlier prompts to compare with. The verdict
+// comes first, so a reply that reasons after it cannot flip it.
+const TASK_CHECK = [
+  'Start the reply with one line: SAME TASK or NEW TASK.',
+  'SAME TASK: the newest prompt continues, fixes or extends the earlier prompts.',
+  'NEW TASK: it has its own goal, unrelated to them. If unsure, SAME TASK.',
+].join('\n')
+
+// What a person reads when a later prompt starts a new task.
+const NEW_TASK = 'loadout: this prompt starts a new task. A new session or /clear gives it its own loadout and a smaller context.'
+
+// How many prompts of the person the new-task check compares with, and how
+// much of each.
+const RECENT = 3
+const RECENT_CHARS = 1000
 
 // Decisions run one at a time, so two listings raised together (main and a
 // subagent) do not classify the same groups twice. A listing with no new group
@@ -93,6 +111,7 @@ function trace($: EngineInterface, file: string, line: Record<string, unknown>):
 export const register: Register = (on, options) => {
   const file = typeof options.traceFile === 'string' ? options.traceFile : ''
   const alwaysKeep = typeof options.alwaysKeep === 'string' ? parseKeep(options.alwaysKeep) : []
+  const checksTask = options.newTaskNote !== false
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -114,11 +133,21 @@ export const register: Register = (on, options) => {
       const names = await keepNow($, alwaysKeep)
       await update($, pinned, () => names)
       await update($, prompt, () => text.slice(0, 4000))
+      if (checksTask && isPerson(e.origin.kind)) await remember($, text)
       return next(e)
     }
-    if ((await read($, isOff)) || !isPerson(e.origin.kind)) return next(e)
-    const picked = await recall($, text)
-    trace($, file, { event: 'recall', named: picked.map(offer => offer.group) })
+    if (!isPerson(e.origin.kind)) return next(e)
+    // The window keeps the prompts sent while the loadout is off too.
+    const earlier = checksTask ? await remember($, text) : []
+    if (await read($, isOff)) return next(e)
+    const named = new Set(await read($, surfaced))
+    const open = (await read($, offers)).filter(offer => !named.has(offer.group))
+    if (open.length === 0) {
+      // Nothing is left to name, so only a toast can come: the prompt does not wait for it.
+      if (earlier.length > 0) void recall($, file, text, earlier, open).catch(() => undefined)
+      return next(e)
+    }
+    const picked = await recall($, file, text, earlier, open)
     if (picked.length === 0) return next(e)
     return next({ ...e, context: [...(e.context ?? []), ...recallNotes(picked)] })
   }).catch(($, e, next) => next(e))
@@ -397,29 +426,42 @@ function isPerson(kind: string): boolean {
   return kind === 'composer' || kind === 'bridge' || kind === 'sdk'
 }
 
-// Matches a later prompt against what is still hidden and not yet named.
-async function recall($: EngineInterface, text: string): Promise<Offer[]> {
-  const named = new Set(await read($, surfaced))
-  const open = (await read($, offers)).filter(offer => !named.has(offer.group))
-  if (open.length === 0) return []
+// Adds a prompt of the person to the recent ones. Returns the ones before it.
+async function remember($: EngineInterface, text: string): Promise<string[]> {
+  let earlier: string[] = []
+  await update($, recent, list => {
+    earlier = list
+    return [...list, text.slice(0, RECENT_CHARS)].slice(-RECENT)
+  })
+  return earlier
+}
 
-  const groups = open.map(offer => offer.group)
+// Matches a later prompt against the hidden items not yet named, and against
+// the earlier prompts: a toast when it starts a different task. With no
+// earlier prompts the task is not checked.
+async function recall($: EngineInterface, file: string, text: string, earlier: string[], open: Offer[]): Promise<Offer[]> {
+  const before = earlier.length === 0 ? '' : `Earlier prompts:\n${earlier.map(one => `<earlier>\n${one}\n</earlier>`).join('\n')}\n\n`
+  const hidden = open.length === 0 ? 'none' : open.map(offer => offer.row).join('\n')
   const reply = await $.model
     .complete({
       model: 'haiku',
-      system: RECALL,
-      prompt: `Newest prompt:\n<prompt>\n${text.slice(0, 4000)}\n</prompt>\n\nHidden:\n${open.map(offer => offer.row).join('\n')}`,
+      system: earlier.length === 0 ? RECALL : `${RECALL}\n${TASK_CHECK}`,
+      prompt: `${before}Newest prompt:\n<prompt>\n${text.slice(0, 4000)}\n</prompt>\n\nHidden:\n${hidden}`,
       maxTokens: 300,
       effort: 'low',
       timeoutMs: 5000,
     })
     .catch(() => null)
-  if (reply === null || !reply.isAnswered) return []
-  const picked = open.filter(offer => parseKept(reply.text, groups).includes(offer.group))
-  if (picked.length === 0) return []
-
-  await update($, surfaced, list => [...list, ...picked.map(offer => offer.group)])
-  $.ui.status(`loadout: pointed to ${picked.map(offer => offer.group).join(', ')}`)
+  const answer = reply?.isAnswered ? reply.text : ''
+  const isNew = earlier.length > 0 && isNewTask(answer)
+  const kept = parseKept(answer, open.map(offer => offer.group))
+  const picked = open.filter(offer => kept.includes(offer.group))
+  trace($, file, { event: 'recall', named: picked.map(offer => offer.group), isNewTask: isNew })
+  if (isNew) $.ui.toast(NEW_TASK, { timeoutMs: 10000 })
+  if (picked.length > 0) {
+    await update($, surfaced, list => [...list, ...picked.map(offer => offer.group)])
+    $.ui.status(`loadout: pointed to ${picked.map(offer => offer.group).join(', ')}`)
+  }
   return picked
 }
 

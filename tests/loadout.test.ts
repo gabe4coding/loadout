@@ -57,11 +57,14 @@ function answer(text: string) {
 }
 
 // The engine's own ui.status, ui.invalidate and ui.toast, which the kit
-// leaves out.
-function quiet(on: On): void {
+// leaves out. Each toast text goes into `toasts`.
+function quiet(on: On, toasts: string[] = []): void {
   on('ui.status', () => ({ value: undefined }))
   on('ui.invalidate', () => ({ value: undefined }))
-  on('ui.toast', () => ({ value: undefined }))
+  on('ui.toast', ($, e) => {
+    toasts.push(String(e.text))
+    return { value: undefined }
+  })
 }
 
 // The plugin's store across sessions. Returns what it holds, for checks.
@@ -161,6 +164,79 @@ test('names hidden tools a later prompt needs, once, without changing the lists'
   expect(seen[2]?.join('\n')).toContain('datadog (2 tools): search_logs, get_trace')
   expect(seen[2]?.join('\n')).toContain('ToolSearch')
   expect(seen[3]).toEqual([])
+})
+
+test('tells the person when a later prompt starts a new task, and leaves the prompt as it is', async ($, on) => {
+  const seen: string[][] = []
+  const asked: string[] = []
+  const toasts: string[] = []
+  on('prompt.submit', ($, e) => {
+    seen.push([...(e.context ?? [])])
+    return { text: e.text }
+  })
+  on('prompt.attachment', ($, e) => ({ text: e.text }))
+  quiet(on, toasts)
+  listed(on)
+  on('model.complete', ($, e) => {
+    const prompt = String(e.prompt)
+    asked.push(prompt)
+    const newest = /<prompt>([\s\S]*)<\/prompt>/.exec(prompt)?.[1]
+    return answer(newest === undefined ? 'claude_in_chrome' : newest.includes('invoice') ? 'NEW TASK' : 'none')
+  })
+
+  await $.prompt.submit({ text: 'Check the login page in the browser', wait: false, origin: COMPOSER } as never)
+  await $.prompt.attachment({ type: 'deferred_tools_delta', text: TOOLS, origin: ENGINE } as never)
+  await $.prompt.submit({ text: 'Now fix the button color', wait: false, origin: COMPOSER } as never)
+  await $.prompt.submit({ text: 'Write a script that totals the invoice files', wait: false, origin: COMPOSER } as never)
+
+  expect(toasts).toHaveLength(1)
+  expect(toasts[0]).toContain('new task')
+  expect(seen[2]).toEqual([])
+  const last = asked.at(-1) ?? ''
+  expect(last).toContain('<earlier>\nCheck the login page in the browser\n</earlier>')
+  expect(last).toContain('<earlier>\nNow fix the button color\n</earlier>')
+})
+
+test('with nothing left to name, checks the task without holding the prompt', async ($, on) => {
+  const seen: string[][] = []
+  const toasts: string[] = []
+  on('prompt.submit', ($, e) => {
+    seen.push([...(e.context ?? [])])
+    return { text: e.text }
+  })
+  on('prompt.attachment', ($, e) => ({ text: e.text }))
+  quiet(on, toasts)
+  listed(on)
+  on('model.complete', ($, e) =>
+    answer(String(e.prompt).includes('<prompt>') ? 'NEW TASK' : 'claude_in_chrome\ndatadog\nslack'),
+  )
+
+  await $.prompt.submit({ text: 'Check the login page in the browser', wait: false, origin: COMPOSER } as never)
+  await $.prompt.attachment({ type: 'deferred_tools_delta', text: TOOLS, origin: ENGINE } as never)
+  await $.prompt.submit({ text: 'Write a script that totals the invoice files', wait: false, origin: COMPOSER } as never)
+  // The check runs after the prompt: wait for its toast.
+  for (let i = 0; i < 100 && toasts.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 10))
+
+  expect(seen[1]).toEqual([])
+  expect(toasts).toHaveLength(1)
+})
+
+test('with newTaskNote off, checks no task and asks nothing when nothing is hidden', { options: { newTaskNote: false } }, async ($, on) => {
+  const asked: string[] = []
+  const toasts: string[] = []
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  quiet(on, toasts)
+  listed(on)
+  on('model.complete', ($, e) => {
+    asked.push(String(e.prompt))
+    return answer('NEW TASK')
+  })
+
+  await $.prompt.submit({ text: 'Check the login page in the browser', wait: false, origin: COMPOSER } as never)
+  await $.prompt.submit({ text: 'Write a script that totals the invoice files', wait: false, origin: COMPOSER } as never)
+
+  expect(asked).toEqual([])
+  expect(toasts).toEqual([])
 })
 
 // With tool search off, Claude Code puts every MCP tool in the prompt and

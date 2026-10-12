@@ -113,6 +113,23 @@ to that prompt only. The note names the item and tells Claude how to load it.
 If the plugin does not name an item, Claude can still find it. Claude searches with ToolSearch for a tool, and with
 SearchSkills for a skill.
 
+## New task in the same session
+
+The same call also compares a later prompt with your last three prompts. If the prompt starts a different task, a
+toast tells you. The toast suggests a new session or `/clear`. Claude does not see it.
+
+A new session gets its own loadout for the new task. Its context also starts small, so each request costs less.
+
+To turn the check off, set the option `newTaskNote` to `false`:
+
+```json
+{
+  "pluginConfigs": {
+    "loadout": { "options": { "newTaskNote": false } }
+  }
+}
+```
+
 ## Cost
 
 The classifier runs on Haiku with low effort.
@@ -121,6 +138,7 @@ The classifier runs on Haiku with low effort.
 | --- | --- | --- |
 | First prompt | One call for the tool listing and one call for the skill listing | 10 seconds each |
 | A server connects after the first prompt | One call for its tool group | 10 seconds |
-| Each later prompt, while hidden items are left to name | One call | 5 seconds |
+| Each later prompt | One call. With `newTaskNote` off, only while hidden items are left to name. | 5 seconds |
 
-A later prompt waits for its call. If the call fails or reaches its time limit, the prompt continues with no note.
+While hidden items are left to name, a later prompt waits for its call. Otherwise the call runs in the background.
+If the call fails or reaches its time limit, the prompt continues with no note and no toast.

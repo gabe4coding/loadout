@@ -207,6 +207,12 @@ export function parseKept(reply: string, groups: readonly string[]): string[] {
     .filter(part => known.has(part))
 }
 
+// The first line of a later prompt's reply says if the prompt starts a new task.
+export function isNewTask(reply: string): boolean {
+  const first = reply.trim().split('\n')[0] ?? ''
+  return /^[-*\s`"]*new task[`"\s.:]*$/i.test(first)
+}
+
 export function rebuild(
   listing: Listing,
   kept: readonly string[],

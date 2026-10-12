@@ -4,6 +4,7 @@ import {
   flipKeep,
   isAlwaysKept,
   isLoginOnly,
+  isNewTask,
   listedSkillFacts,
   mcpTools,
   parseKeep,
@@ -23,6 +24,14 @@ import {
 test('reads only known ids from a loose classifier reply', () => {
   const kept = parseKept('- `datadog`\n"slack", unknown\n\n  github  ', ['datadog', 'slack', 'github'])
   expect(kept).toEqual(['datadog', 'slack', 'github'])
+})
+
+test('reads the new-task verdict from the first line of a reply only', () => {
+  expect(isNewTask('NEW TASK\ndatadog')).toBe(true)
+  expect(isNewTask('\n- `New task.`')).toBe(true)
+  expect(isNewTask('SAME TASK\nnone')).toBe(false)
+  expect(isNewTask('datadog\nNEW TASK')).toBe(false)
+  expect(isNewTask('not a new task')).toBe(false)
 })
 
 test('keeps core deferred tools whatever the classifier keeps', () => {
