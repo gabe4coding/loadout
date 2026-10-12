@@ -41,6 +41,19 @@ const LISTED = [
   { name: 'mcp__claude-in-chrome__navigate', description: 'Open a page', mcp: true },
 ]
 
+const SEARCH = { name: 'ToolSearch', description: 'Load deferred tools', mcp: false }
+
+// $.tool.list() as the engine answers it: with tool search on unless `tools`
+// says otherwise.
+function listed(on: On, tools: object[] = [SEARCH, ...LISTED]): void {
+  on('tool.list', () => ({ value: tools }) as never)
+}
+
+// A classifier that replies `text`.
+function answer(text: string) {
+  return answer(text)
+}
+
 // The engine's own ui.status and ui.invalidate, which the kit leaves out.
 function quiet(on: On): void {
   on('ui.status', () => ({ value: undefined }))
@@ -52,13 +65,10 @@ test('keeps only what the classifier picks, and says what it hid', async ($, on)
   on('prompt.attachment', ($, e) => ({ text: e.text }))
   on('prompt.section', ($, e) => ({ text: e.text }))
   quiet(on)
-  on('model.complete', ($, e) => ({
-    value: {
-      isAnswered: true,
-      text: String(e.prompt).includes('dep-scan') ? 'local-tools:dep-scan\nnot-a-skill' : 'claude_in_chrome',
-      usage: { inputTokens: 1, outputTokens: 1 },
-    },
-  }) as never)
+  listed(on)
+  on('model.complete', ($, e) =>
+    answer(String(e.prompt).includes('dep-scan') ? 'local-tools:dep-scan\nnot-a-skill' : 'claude_in_chrome'),
+  )
 
   await $.prompt.submit({ text: 'Check the login page in the browser for a CVE', wait: false } as never)
 
@@ -83,6 +93,7 @@ test('keeps everything when the classifier fails', async ($, on) => {
   on('prompt.submit', ($, e) => ({ text: e.text }))
   on('prompt.attachment', ($, e) => ({ text: e.text }))
   quiet(on)
+  listed(on)
   on('model.complete', () => ({ value: { isAnswered: false, reason: 'api-error', status: 500, error: 'x' } }) as never)
 
   await $.prompt.submit({ text: 'Anything', wait: false } as never)
@@ -104,11 +115,12 @@ test('names hidden tools a later prompt needs, once, without changing the lists'
   })
   on('prompt.attachment', ($, e) => ({ text: e.text }))
   quiet(on)
+  listed(on)
   on('model.complete', ($, e) => {
     const asked = String(e.prompt)
     const newest = /<prompt>([\s\S]*)<\/prompt>/.exec(asked)?.[1]
     const text = newest === undefined ? 'claude_in_chrome' : newest.includes('logs') ? 'datadog' : 'none'
-    return { value: { isAnswered: true, text, usage: { inputTokens: 1, outputTokens: 1 } } } as never
+    return answer(text)
   })
   const composer = { kind: 'composer' } as const
 
@@ -138,10 +150,10 @@ test('hides no tool group when tool search is off', async ($, on) => {
   })
   on('prompt.attachment', ($, e) => ({ text: e.text }))
   quiet(on)
-  on('tool.list', () => ({ value: [{ name: 'Read', description: 'Read a file', mcp: false }, ...LISTED] }))
+  listed(on, LISTED)
   on('model.complete', ($, e) => {
     asked.push(String(e.prompt))
-    return { value: { isAnswered: true, text: 'claude_in_chrome', usage: { inputTokens: 1, outputTokens: 1 } } } as never
+    return answer('claude_in_chrome')
   })
   const composer = { kind: 'composer' } as const
 
@@ -160,10 +172,8 @@ test('classifies from the tool list when the instructions come first', async ($,
   on('prompt.submit', ($, e) => ({ text: e.text }))
   on('prompt.attachment', ($, e) => ({ text: e.text }))
   quiet(on)
-  on('tool.list', () => ({ value: [{ name: 'ToolSearch', description: 'Load deferred tools', mcp: false }, ...LISTED] }))
-  on('model.complete', () => ({
-    value: { isAnswered: true, text: 'claude_in_chrome', usage: { inputTokens: 1, outputTokens: 1 } },
-  }) as never)
+  listed(on)
+  on('model.complete', () => answer('claude_in_chrome'))
 
   await $.prompt.submit({ text: 'Check the login page in the browser', wait: false } as never)
   const delta = await $.prompt.attachment({ type: 'mcp_instructions_delta', text: BLOCKS, origin: ENGINE } as never)
@@ -172,4 +182,58 @@ test('classifies from the tool list when the instructions come first', async ($,
 
   const tools = await $.prompt.attachment({ type: 'deferred_tools_delta', text: TOOLS, origin: ENGINE } as never)
   expect(tools.text).not.toContain('mcp__datadog__search_logs')
+})
+
+// A server that connects late can raise its instructions before its tool
+// listing. Its group gets a decision of its own there, and the earlier ones stay.
+test('classifies a server that connects late from its instructions', async ($, on) => {
+  const asked: string[] = []
+  const tools = [SEARCH, ...LISTED]
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  on('prompt.attachment', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on, tools)
+  on('model.complete', ($, e) => {
+    asked.push(String(e.prompt))
+    return answer('claude_in_chrome')
+  })
+
+  await $.prompt.submit({ text: 'Check the login page in the browser', wait: false } as never)
+  await $.prompt.attachment({ type: 'mcp_instructions_delta', text: BLOCKS, origin: ENGINE } as never)
+  tools.push({ name: 'mcp__slack__send_message', description: 'Send a message', mcp: true })
+  const late = '## slack\nSlack rules.'
+  const delta = await $.prompt.attachment({ type: 'mcp_instructions_delta', text: late, origin: ENGINE } as never)
+
+  expect(delta.text).not.toContain('Slack rules.')
+  expect(asked).toHaveLength(2)
+  expect(asked[1]).toContain('slack (1 tools)')
+  expect(asked[1]).not.toContain('datadog')
+})
+
+// A deny rule takes ToolSearch out of the tool list. Claude then cannot load a
+// hidden tool, so the plugin hides none.
+test('keeps the tool listing when ToolSearch is denied', async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  on('prompt.attachment', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on, LISTED)
+  on('model.complete', () => answer('claude_in_chrome'))
+
+  await $.prompt.submit({ text: 'Check the login page in the browser', wait: false } as never)
+  const tools = await $.prompt.attachment({ type: 'deferred_tools_delta', text: TOOLS, origin: ENGINE } as never)
+  expect(tools.text).toBe(TOOLS)
+})
+
+test('/loadout says that no tool group is hidden when the session has no ToolSearch', async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  on('prompt.attachment', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on, LISTED)
+  on('model.complete', () => answer('local-tools:dep-scan'))
+
+  await $.prompt.submit({ text: 'Check the dependencies for a CVE', wait: false } as never)
+  await $.prompt.attachment({ type: 'skill_listing', text: SKILLS, origin: ENGINE } as never)
+  const out = await $.command.run({ command: 'loadout', args: '' } as never)
+  expect(out.text).toContain('Tool groups hidden: none')
+  expect(out.text).not.toContain('Tool groups kept: none')
 })

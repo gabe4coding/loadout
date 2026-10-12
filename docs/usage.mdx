@@ -31,6 +31,9 @@ Type `/loadout`. The command shows these lines:
 | Skills hidden | The number of hidden skills |
 | Named to later prompts | The hidden items that a note named to Claude after a later prompt |
 
+If the plugin did not classify the tool groups, one line `Tool groups hidden: none` replaces the two tool group lines.
+This happens when the session has no ToolSearch or no MCP tools.
+
 The plugin always keeps the deferred tools of Claude Code itself, for example `WebFetch` and `CronCreate`.
 
 ## Turn it off for a session

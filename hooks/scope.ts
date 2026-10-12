@@ -85,6 +85,16 @@ export function groupsOf(listing: Listing, kind: 'tools' | 'skills'): string[] {
   return [...groups]
 }
 
+// The groups of `listing` that no decision covers yet.
+export function unseenGroups(
+  listing: Listing,
+  kind: 'tools' | 'skills',
+  before: { kept: readonly string[]; hidden: readonly string[] } | null,
+): string[] {
+  const seen = new Set([...(before?.kept ?? []), ...(before?.hidden ?? [])])
+  return groupsOf(listing, kind).filter(group => !seen.has(group))
+}
+
 // Reads the classifier's reply: one group id per line, anything else ignored.
 export function parseKept(reply: string, groups: readonly string[]): string[] {
   const known = new Set(groups)
