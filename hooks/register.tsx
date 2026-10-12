@@ -160,7 +160,7 @@ export const register: Register = (on, options) => {
   const defaults: Switches = { effort: options.effortPerPrompt === true, model: options.modelForSession === true }
 
   on('session.start', async ($, e, next) => {
-    // A new session (also after /clear) starts with no effort history.
+    // A new session starts with no effort history. /clear does not fire this event.
     picking = null
     last = null
     // The typeahead is built before this hook runs, so commands/loadout.md lists

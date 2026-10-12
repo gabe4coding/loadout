@@ -439,6 +439,12 @@ test('/loadout off sends the next requests to the session model', { options: { m
   expect(models).toEqual(['claude-haiku-5-5', 'claude-opus-5-5', 'claude-opus-5-5'])
 })
 
+test('answers /loadout under its plugin name too', async ($, on) => {
+  quiet(on)
+  const { text } = await $.command.run({ ...run('off'), command: 'loadout:loadout' } as never)
+  expect(text).toContain('loadout is off')
+})
+
 test('keeps the session model when the person says no, or the pick is not smaller', { options: { modelForSession: true } }, async ($, on) => {
   on('prompt.submit', ($, e) => ({ text: e.text }))
   quiet(on)
