@@ -1,12 +1,15 @@
 import { expect, test } from 'claude-code/testing'
 
 import {
+  capEffort,
   flipKeep,
   isAlwaysKept,
   isLoginOnly,
+  isNewTask,
   listedSkillFacts,
   mcpTools,
   parseKeep,
+  parseEffort,
   parseKept,
   parseSkills,
   parseTools,
@@ -16,6 +19,7 @@ import {
   serverLabel,
   skillDetail,
   splitMcpName,
+  takesTurnEffort,
   trimMcpInstructions,
   unseenGroups,
 } from '../hooks/scope'
@@ -23,6 +27,14 @@ import {
 test('reads only known ids from a loose classifier reply', () => {
   const kept = parseKept('- `datadog`\n"slack", unknown\n\n  github  ', ['datadog', 'slack', 'github'])
   expect(kept).toEqual(['datadog', 'slack', 'github'])
+})
+
+test('reads the new-task verdict from the first line of a reply only', () => {
+  expect(isNewTask('NEW TASK\ndatadog')).toBe(true)
+  expect(isNewTask('\n- `New task.`')).toBe(true)
+  expect(isNewTask('SAME TASK\nnone')).toBe(false)
+  expect(isNewTask('datadog\nNEW TASK')).toBe(false)
+  expect(isNewTask('not a new task')).toBe(false)
 })
 
 test('keeps core deferred tools whatever the classifier keeps', () => {
@@ -132,4 +144,23 @@ test('gives a skill fact the listed name that adds its plugin, when one name fit
     'pdf',
   ])
   expect(listedSkillFacts([fact('skill-creator')], listed).map(f => f.name)).toEqual(['skill-creator'])
+})
+
+test('reads one effort level from a reply, and caps it at the session level', () => {
+  expect(parseEffort('high')).toBe('high')
+  expect(parseEffort('`xhigh`.')).toBe('xhigh')
+  expect(parseEffort('low or high')).toBe(null)
+  expect(parseEffort('hard')).toBe(null)
+  expect(capEffort('max', 'medium')).toBe('medium')
+  expect(capEffort('low', 'high')).toBe('low')
+  expect(capEffort('low', 5000)).toBe(null)
+})
+
+test('changes the effort only on models that take it in a message', () => {
+  expect(takesTurnEffort('claude-sonnet-5-5')).toBe(true)
+  expect(takesTurnEffort('claude-opus-5-5[1m]')).toBe(true)
+  expect(takesTurnEffort('claude-opus-5')).toBe(true)
+  expect(takesTurnEffort('claude-sonnet-5')).toBe(false)
+  expect(takesTurnEffort('claude-opus-4-8')).toBe(false)
+  expect(takesTurnEffort('claude-opus-5-1')).toBe(false)
 })

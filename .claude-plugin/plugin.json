@@ -1,6 +1,6 @@
 {
   "name": "loadout",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "Reads the first prompt of a session and hides the deferred tools, skills and MCP server instructions that the task does not need.",
   "types": "./types/index.d.ts",
   "author": {
@@ -12,6 +12,27 @@
       "title": "Always keep",
       "description": "Skill names, plugin names and MCP server names that the plugin never hides, separated by commas. The names from \"/loadout keep\" add to this list. A change applies from the next session.",
       "default": "",
+      "required": false
+    },
+    "newTaskNote": {
+      "type": "boolean",
+      "title": "New task note",
+      "description": "If a later prompt starts a different task, show a short note that suggests a new session. The check uses the classifier call of later prompts.",
+      "default": true,
+      "required": false
+    },
+    "effortPerPrompt": {
+      "type": "boolean",
+      "title": "Effort for each prompt",
+      "description": "If true, the classifier picks the effort for each prompt that you send. The plugin only lowers the effort of the session, and only on models that keep the prompt cache when the effort changes.",
+      "default": false,
+      "required": false
+    },
+    "modelForSession": {
+      "type": "boolean",
+      "title": "Model for the session",
+      "description": "If true, the classifier picks the model from your first prompt, and the plugin uses it for the whole session. The plugin only changes to a smaller model of the same family (Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5).",
+      "default": false,
       "required": false
     },
     "traceFile": {

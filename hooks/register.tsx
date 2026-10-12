@@ -1,9 +1,15 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, ToolInfo } from 'claude-code'
+import type { EngineInterface, Register, ToolInfo, TurnStepResult } from 'claude-code'
 
-import type { Choice, Offer, ServerFact, SkillFact } from '../types'
+import type { Choice, Effort, Offer, Route, ServerFact, SkillFact, Switches } from '../types'
 import {
   flipKeep,
+  capEffort,
+  isNewTask,
+  parseEffort,
+  parseModel,
+  routeModel,
+  takesTurnEffort,
   groupsOf,
   isAlwaysKept,
   mcpTools,
@@ -33,6 +39,10 @@ const skills = atom({ plugin: 'loadout', key: 'skills' } as const, null)
 const isOff = atom({ plugin: 'loadout', key: 'isOff' } as const, false)
 const offers = atom({ plugin: 'loadout', key: 'offers' } as const, [])
 const surfaced = atom({ plugin: 'loadout', key: 'surfaced' } as const, [])
+const recent = atom({ plugin: 'loadout', key: 'recent' } as const, [])
+const effort = atom({ plugin: 'loadout', key: 'effort' } as const, { level: null, isFrozen: false })
+const route = atom({ plugin: 'loadout', key: 'route' } as const, null)
+const switches = atom({ plugin: 'loadout', key: 'switches' } as const, {})
 const pinned = atom({ plugin: 'loadout', key: 'pinned' } as const, [])
 const marks = atom({ plugin: 'loadout', key: 'marks' } as const, null)
 const skillNames = atom({ plugin: 'loadout', key: 'skillNames' } as const, [])
@@ -58,10 +68,63 @@ const RECALL = [
   'Reply with their ids, one per line, or the word none. Pick few: only clear needs.',
 ].join('\n')
 
+// Added to RECALL when there are earlier prompts to compare with. The verdict
+// comes first, so a reply that reasons after it cannot flip it.
+const TASK_CHECK = [
+  'Start the reply with one line: SAME TASK or NEW TASK.',
+  'SAME TASK: the newest prompt continues, fixes or extends the earlier prompts.',
+  'NEW TASK: it has its own goal, unrelated to them. If unsure, SAME TASK.',
+].join('\n')
+
+// What a person reads when a later prompt starts a new task.
+const NEW_TASK = 'loadout: this prompt starts a new task. A new session or /clear gives it its own loadout and a smaller context.'
+
+const EFFORT = [
+  'You choose the reasoning effort an AI coding agent needs for its newest prompt.',
+  'Reply with one word: low, medium, high, xhigh or max.',
+  'low: a short answer, a lookup or a one-line change.',
+  'medium: a normal coding task in a few files.',
+  'high: a change across many files, or debugging.',
+  'xhigh: a hard bug, a design decision or a long task with many steps.',
+  'max: only when correctness matters far more than cost.',
+  'If unsure, reply medium.',
+].join('\n')
+
+const MODEL = [
+  'You choose the model an AI coding agent needs for a new session, from its first prompt.',
+  'Reply with one word: haiku, sonnet, opus or fable.',
+  'haiku: a short answer, a lookup or a small change in one file.',
+  'sonnet: a normal coding task: a feature, a fix or a review in a few files.',
+  'opus: a hard task: a large change across many files, a hard bug or a design decision.',
+  'fable: only for the hardest tasks, where correctness matters far more than cost.',
+  'If unsure, reply sonnet.',
+].join('\n')
+
+// A request that keeps less than this part of the cache of the request before
+// it lost the cache.
+const CACHE_KEPT = 0.5
+
+// The shortest life of the prompt cache. After a longer pause the cache can be
+// gone for any reason, so a small cache read then proves nothing.
+const CACHE_LIFE_MS = 5 * 60 * 1000
+
+// How many prompts of the person the new-task check compares with, and how
+// much of each.
+const RECENT = 3
+const RECENT_CHARS = 1000
+
 // Decisions run one at a time, so two listings raised together (main and a
 // subagent) do not classify the same groups twice. A listing with no new group
 // gets the stored decision at once, with no wait behind a classifier call.
 let queue: Promise<unknown> = Promise.resolve()
+
+// The effort pick for the newest prompt of the person, until the first main
+// request of its turn takes it.
+let picking: Promise<Effort | null> | null = null
+
+// The last main request: its effort, model, cached input (read plus written)
+// and time, for the cache check after a change of effort.
+let last: { sent: string; model: string; cached: number; at: number } | null = null
 
 async function choose($: EngineInterface, kind: Kind, listing: Listing): Promise<Choice> {
   const before = await readChoice($, kind)
@@ -93,11 +156,16 @@ function trace($: EngineInterface, file: string, line: Record<string, unknown>):
 export const register: Register = (on, options) => {
   const file = typeof options.traceFile === 'string' ? options.traceFile : ''
   const alwaysKeep = typeof options.alwaysKeep === 'string' ? parseKeep(options.alwaysKeep) : []
+  const checksTask = options.newTaskNote !== false
+  const defaults: Switches = { effort: options.effortPerPrompt === true, model: options.modelForSession === true }
 
   on('session.start', async ($, e, next) => {
+    // A new session (also after /clear) starts with no effort history.
+    picking = null
+    last = null
     await $.command.register({
       name: 'loadout',
-      description: 'Show the loadout of this session. Also: list, pick, keep <name>, unkeep <name>, off, on',
+      description: 'Show the loadout of this session. Also: list, pick, keep <name>, unkeep <name>, off, on, effort on|off, model on|off',
     })
     return next(e)
   })
@@ -108,20 +176,56 @@ export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     const text = e.text.trim()
     if (text === '') return next(e)
-    if ((await read($, prompt)) === null) {
+    const isFirst = (await read($, prompt)) === null
+    if (isFirst) {
       // The session keeps the names of this moment: a server that connects
       // later gets the same names, and a change applies from the next session.
       const names = await keepNow($, alwaysKeep)
       await update($, pinned, () => names)
       await update($, prompt, () => text.slice(0, 4000))
+    }
+    if (!isPerson(e.origin.kind)) return next(e)
+    const { effort: setsEffort, model: setsModel } = await uses($, defaults)
+    // The window keeps the prompts sent while the loadout is off too.
+    const window = await remember($, text)
+    if (await read($, isOff)) return next(e)
+    if (setsEffort && !(await read($, effort)).isFrozen) picking = pickEffort($, file, text, window)
+    if (isFirst) {
+      // The person answers before the first request, which then goes to the model they chose.
+      if (setsModel) await chooseModel($, file, text).catch(() => undefined)
       return next(e)
     }
-    if ((await read($, isOff)) || !isPerson(e.origin.kind)) return next(e)
-    const picked = await recall($, text)
-    trace($, file, { event: 'recall', named: picked.map(offer => offer.group) })
+    const earlier = checksTask ? window : []
+    const named = new Set(await read($, surfaced))
+    const open = (await read($, offers)).filter(offer => !named.has(offer.group))
+    if (open.length === 0) {
+      // Nothing is left to name, so only a toast can come: the prompt does not wait for it.
+      if (earlier.length > 0) void recall($, file, text, earlier, open).catch(() => undefined)
+      return next(e)
+    }
+    const picked = await recall($, file, text, earlier, open)
     if (picked.length === 0) return next(e)
     return next({ ...e, context: [...(e.context ?? []), ...recallNotes(picked)] })
   }).catch(($, e, next) => next(e))
+
+  // The main requests of the session go to the model picked for the first
+  // prompt. Those of a turn get the effort picked for its prompt, at most the
+  // session's own effort, and only on a model that takes the effort in a
+  // message: there a change keeps the cache.
+  on('turn.step', async function* ($, e, next) {
+    if (e.agentId !== undefined) return yield* next(e)
+    const [{ effort: setsEffort, model: setsModel }, { isFrozen }] = await Promise.all([uses($, defaults), read($, effort)])
+    // A fixed effort stays when the switch is off, to keep the cache.
+    if (!setsModel && !setsEffort && !isFrozen) return yield* next(e)
+    const model = setsModel ? await modelFor($, e.model).catch(() => null) : null
+    const base = model === null ? e : { ...e, model }
+    if (e.effort === undefined || !takesTurnEffort(base.model)) return yield* next(base)
+    const level = await effortFor($, setsEffort).catch(() => null)
+    const sent = (level === null ? null : capEffort(level, e.effort)) ?? e.effort
+    const result = yield* next(sent === e.effort ? base : { ...base, effort: sent })
+    await watchCache($, file, String(sent), result).catch(() => undefined)
+    return result
+  })
 
   on('prompt.attachment', { type: 'deferred_tools_delta' }, async ($, e, next) => {
     const base = await next(e)
@@ -192,6 +296,7 @@ export const register: Register = (on, options) => {
       // The kind of a typed name is not known: a skill or a server.
       return { text: await setMark($, alwaysKeep, name, ['skills', 'tools'], word === 'keep') }
     }
+    if (word === 'effort' || word === 'model') return { text: await toggle($, word, rest) }
     if (word === 'list') return { text: listText(await items($, null), await keepNow($, alwaysKeep)) }
     if (word === 'pick') {
       const held = await readMarks($)
@@ -199,7 +304,7 @@ export const register: Register = (on, options) => {
       const { isPlaced } = await $.ui.open({ id: PANE, title: 'loadout: always keep', focus: true, closeOnEscape: true })
       return { text: isPlaced ? 'Opened the always-keep picker.' : 'No surface shows the picker here. Use "/loadout list" and "/loadout keep <name>".' }
     }
-    return { text: await summary($) }
+    return { text: await summary($, defaults) }
   })
 
   // Each opening of the picker reads the facts once, so a draw on each key of
@@ -208,6 +313,24 @@ export const register: Register = (on, options) => {
     const known = await readFacts($)
     await update($, facts, () => known)
     return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // A model the person sets with /model stays for the rest of the session.
+  // The security module skips classic.PostModelSwitch for a user plugin, so
+  // the plugin watches the command, and modelFor each request.
+  on('command.run', { command: 'model' }, async ($, e, next) => {
+    const result = await next(e)
+    const now = await read($, route)
+    if (now !== null && (await $.session.model()) !== now.from) await endRoute($)
+    return result
+  }).catch(($, e, next) => next(e))
+
+  // The status line and /model still show the session's model: the footer
+  // names the model that answers.
+  on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    const now = await read($, route)
+    if (now === null) return next(e)
+    return next({ ...e, props: { ...e.props, modes: [...e.props.modes, `${now.to.replace(/^claude-/, '')} (loadout)`] } })
   }).catch(($, e, next) => next(e))
 
   // The always-keep picker: a section for the tool servers and one for the
@@ -397,29 +520,165 @@ function isPerson(kind: string): boolean {
   return kind === 'composer' || kind === 'bridge' || kind === 'sdk'
 }
 
-// Matches a later prompt against what is still hidden and not yet named.
-async function recall($: EngineInterface, text: string): Promise<Offer[]> {
-  const named = new Set(await read($, surfaced))
-  const open = (await read($, offers)).filter(offer => !named.has(offer.group))
-  if (open.length === 0) return []
+// Adds a prompt of the person to the recent ones. Returns the ones before it.
+async function remember($: EngineInterface, text: string): Promise<string[]> {
+  let earlier: string[] = []
+  await update($, recent, list => {
+    earlier = list
+    return [...list, text.slice(0, RECENT_CHARS)].slice(-RECENT)
+  })
+  return earlier
+}
 
-  const groups = open.map(offer => offer.group)
+// Asks the classifier for one word of `parse` about a prompt of the person.
+// Null on any failure.
+async function pickWord<T>(
+  $: EngineInterface,
+  system: string,
+  text: string,
+  earlier: string[],
+  parse: (reply: string) => T | null,
+): Promise<T | null> {
+  const reply = await $.model
+    .complete({ model: 'haiku', system, prompt: promptBlock(text, earlier), maxTokens: 20, effort: 'low', timeoutMs: 5000 })
+    .catch(() => null)
+  return reply?.isAnswered ? parse(reply.text) : null
+}
+
+// Asks the classifier for the model of the session, from its first prompt. A
+// smaller model goes to the person, who must approve it. On any failure, or a
+// dismissed question, the session keeps its model.
+async function chooseModel($: EngineInterface, file: string, text: string): Promise<void> {
+  const [picked, session] = await Promise.all([pickWord($, MODEL, text, [], parseModel), $.session.model()])
+  const to = picked === null ? null : routeModel(picked, session)
+  trace($, file, { event: 'model_pick', picked, session, to })
+  if (to === null) return
+  const use = `Use ${to}`
+  const answer = await $.ui.ask(
+    `loadout: ${to} looks enough for this task. Use it instead of ${session} for this session? The status line and /model still show ${session}.`,
+    { header: 'Model', options: [use, `Keep ${session}`] },
+  )
+  const isUsed = answer === use
+  trace($, file, { event: 'model_route', from: session, to, isUsed })
+  if (!isUsed) return
+  await update($, route, () => ({ from: session, to }))
+  $.ui.invalidate('ui.render')
+}
+
+// The model for a main request: the one the person approved. A request on
+// another model (a /model change, a fallback) or /loadout off ends the change
+// for the rest of the session.
+async function modelFor($: EngineInterface, model: string): Promise<string | null> {
+  const [now, off] = await Promise.all([read($, route), read($, isOff)])
+  if (now === null) return null
+  if (model === now.from && !off) return now.to
+  await endRoute($)
+  return null
+}
+
+// The effort and model changes: the option, unless /loadout switched them
+// for this session.
+async function uses($: EngineInterface, defaults: Switches): Promise<Switches> {
+  return { ...defaults, ...(await read($, switches)) }
+}
+
+const SWITCH = {
+  effort: { name: 'Effort for each prompt', on: 'from the next prompt', off: 'from the next prompt' },
+  model: { name: 'Model for the session', on: 'from the first prompt', off: 'from the next request' },
+} as const
+
+// `/loadout effort|model on|off`: sets the change for this session.
+async function toggle($: EngineInterface, which: keyof Switches, words: string[]): Promise<string> {
+  const [word] = words
+  if ((word !== 'on' && word !== 'off') || words.length > 1) return `Type "/loadout ${which} on" or "/loadout ${which} off".`
+  const { name } = SWITCH[which]
+  // The model comes from the first prompt only: once it is sent, "on" waits for a new session.
+  if (which === 'model' && word === 'on' && (await read($, prompt)) !== null) {
+    return `${name} picks the model from the first prompt only. Start a new session or run /clear, then type "/loadout model on" before the first prompt.`
+  }
+  await update($, switches, now => ({ ...now, [which]: word === 'on' }))
+  if (which === 'model' && word === 'off') await endRoute($)
+  return `${name} is ${word} for this session, ${SWITCH[which][word]}.`
+}
+
+async function endRoute($: EngineInterface): Promise<void> {
+  if ((await read($, route)) === null) return
+  await update($, route, () => null)
+  $.ui.invalidate('ui.render')
+}
+
+// Asks the classifier for the effort of a prompt of the person. Null on any
+// failure: the request then keeps the effort it has.
+async function pickEffort($: EngineInterface, file: string, text: string, earlier: string[]): Promise<Effort | null> {
+  const picked = await pickWord($, EFFORT, text, earlier, parseEffort)
+  trace($, file, { event: 'effort_pick', picked })
+  return picked
+}
+
+// The effort for a main request: the pick of the newest prompt once it is
+// there, else the one before. Null when the plugin leaves the effort alone:
+// switched off, unless a fixed effort keeps the cache.
+async function effortFor($: EngineInterface, isOn: boolean): Promise<Effort | null> {
+  const pending = picking
+  picking = null
+  const [state, off] = await Promise.all([read($, effort), read($, isOff)])
+  if (state.isFrozen) return state.level
+  if (off || !isOn) return null
+  const picked = pending === null ? null : await pending
+  if (picked === null || picked === state.level) return state.level
+  await update($, effort, now => ({ ...now, level: picked }))
+  $.ui.status(`loadout: effort ${picked}`)
+  return picked
+}
+
+// After a main request with a changed effort: if it lost most of the cache,
+// the model did not take the effort in a message. The effort then stays.
+async function watchCache($: EngineInterface, file: string, sent: string, result: TurnStepResult): Promise<void> {
+  const usage = result.usage
+  if (usage === null) return
+  const before = last
+  const at = await $.clock.now()
+  last = { sent, model: usage.model, cached: usage.cache_read_input_tokens + usage.cache_creation_input_tokens, at }
+  if (before === null || before.sent === sent) return
+  trace($, file, { event: 'effort_change', from: before.sent, to: sent, cacheRead: usage.cache_read_input_tokens })
+  // A change of model, or a pause past the life of the cache, also loses it.
+  if (before.model !== usage.model || at - before.at > CACHE_LIFE_MS) return
+  if (before.cached === 0 || usage.cache_read_input_tokens >= before.cached * CACHE_KEPT) return
+  await update($, effort, now => ({ ...now, isFrozen: true }))
+  trace($, file, { event: 'effort_frozen', level: sent, model: usage.model })
+}
+
+// The prompt of a classifier call on a prompt of the person.
+function promptBlock(text: string, earlier: string[]): string {
+  const before = earlier.length === 0 ? '' : `Earlier prompts:\n${earlier.map(one => `<earlier>\n${one}\n</earlier>`).join('\n')}\n\n`
+  return `${before}Newest prompt:\n<prompt>\n${text.slice(0, 4000)}\n</prompt>`
+}
+
+// Matches a later prompt against the hidden items not yet named, and against
+// the earlier prompts: a toast when it starts a different task. With no
+// earlier prompts the task is not checked.
+async function recall($: EngineInterface, file: string, text: string, earlier: string[], open: Offer[]): Promise<Offer[]> {
+  const hidden = open.length === 0 ? 'none' : open.map(offer => offer.row).join('\n')
   const reply = await $.model
     .complete({
       model: 'haiku',
-      system: RECALL,
-      prompt: `Newest prompt:\n<prompt>\n${text.slice(0, 4000)}\n</prompt>\n\nHidden:\n${open.map(offer => offer.row).join('\n')}`,
+      system: earlier.length === 0 ? RECALL : `${RECALL}\n${TASK_CHECK}`,
+      prompt: `${promptBlock(text, earlier)}\n\nHidden:\n${hidden}`,
       maxTokens: 300,
       effort: 'low',
       timeoutMs: 5000,
     })
     .catch(() => null)
-  if (reply === null || !reply.isAnswered) return []
-  const picked = open.filter(offer => parseKept(reply.text, groups).includes(offer.group))
-  if (picked.length === 0) return []
-
-  await update($, surfaced, list => [...list, ...picked.map(offer => offer.group)])
-  $.ui.status(`loadout: pointed to ${picked.map(offer => offer.group).join(', ')}`)
+  const answer = reply?.isAnswered ? reply.text : ''
+  const isNew = earlier.length > 0 && isNewTask(answer)
+  const kept = parseKept(answer, open.map(offer => offer.group))
+  const picked = open.filter(offer => kept.includes(offer.group))
+  trace($, file, { event: 'recall', named: picked.map(offer => offer.group), isNewTask: isNew })
+  if (isNew) $.ui.toast(NEW_TASK, { timeoutMs: 10000 })
+  if (picked.length > 0) {
+    await update($, surfaced, list => [...list, ...picked.map(offer => offer.group)])
+    $.ui.status(`loadout: pointed to ${picked.map(offer => offer.group).join(', ')}`)
+  }
   return picked
 }
 
@@ -529,10 +788,13 @@ async function classify(
   return parseKept(reply.text, groups)
 }
 
-async function summary($: EngineInterface): Promise<string> {
+async function summary($: EngineInterface, defaults: Switches): Promise<string> {
   if (await read($, isOff)) return 'loadout is off for this session.'
-  const [t, s] = [await read($, tools), await read($, skills)]
-  if (t === null && s === null) return 'loadout has not picked a loadout for this session yet. Send a prompt first.'
+  const [t, s, now] = [await read($, tools), await read($, skills), await uses($, defaults)]
+  const switchLine = (Object.keys(SWITCH) as (keyof Switches)[]).map(which => `${SWITCH[which].name}: ${now[which] ? 'on' : 'off'}`).join(', ')
+  if (t === null && s === null) {
+    return ['loadout has not picked a loadout for this session yet. Send a prompt first.', switchLine, ...modelLine(await read($, route)), ...effortLine(await read($, effort), now.effort)].join('\n')
+  }
   // No tool decision: the session has no ToolSearch or no MCP tools.
   const toolLines = t === null
     ? ['Tool groups hidden: none']
@@ -543,5 +805,17 @@ async function summary($: EngineInterface): Promise<string> {
     `Skills kept: ${s?.kept.join(', ') || 'none'}`,
     `Skills hidden: ${s?.hidden.length ?? 0}`,
     `Named to later prompts: ${(await read($, surfaced)).join(', ') || 'none'}`,
+    switchLine,
+    ...modelLine(await read($, route)),
+    ...effortLine(await read($, effort), now.effort),
   ].join('\n')
+}
+
+function modelLine(state: Route | null): string[] {
+  return state === null ? [] : [`Model: ${state.to} (the session's model: ${state.from})`]
+}
+
+function effortLine(state: { level: string | null; isFrozen: boolean }, isOn: boolean): string[] {
+  if (state.level === null || (!isOn && !state.isFrozen)) return []
+  return [`Effort: ${state.level}${state.isFrozen ? ' (fixed: a change lost the prompt cache on this model)' : ''}`]
 }

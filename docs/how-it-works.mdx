@@ -43,6 +43,9 @@ reach them. A hidden tool loads with ToolSearch. A hidden skill runs with the Sk
 On a later prompt, the classifier compares the prompt with the hidden items. If the prompt needs one, the plugin
 attaches a note to that prompt. You do not see this note. Claude reads it.
 
+The same call compares the prompt with your last three prompts. If the prompt starts a different task, a toast
+suggests a new session. Claude does not see the toast.
+
 ## The prompt cache
 
 The listings are in the first message of the conversation. Each request sends this message again. The API reads it
@@ -69,6 +72,9 @@ The classifier sends these items to Haiku through the API client and login of Cl
 - The names of the hidden-item candidates: up to 10 tool names for each server, and the first 160 characters of
   each skill entry. The items on the always-keep list are not candidates, so the plugin does not send them.
 - On a later prompt, its first 4,000 characters and the rows of the items that are still hidden.
+- On a later prompt, the first 1,000 characters of your last three prompts, for the new-task check.
+- With `effortPerPrompt` on, each prompt that you send and your last three prompts, for the effort pick.
+- With `modelForSession` on, the first prompt, for the model pick.
 
 The plugin sends no file contents and no tool results. It stores nothing on disk, except the always-keep names
 from `/loadout keep` and the pane. Claude Code keeps them in the storage of the plugin. The other state lasts for the
@@ -77,4 +83,4 @@ session only.
 ## Failures
 
 If a classifier call fails, the plugin keeps all items of that listing. If a later prompt check fails, the prompt
-continues with no note. If a hook of the plugin fails, Claude Code skips it and uses the full listing.
+continues with no note and no toast. If a hook of the plugin fails, Claude Code skips it and uses the full listing.

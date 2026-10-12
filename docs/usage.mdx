@@ -100,6 +100,20 @@ Type `/loadout off`. The next request has the full listings again. Type `/loadou
 
 Each switch changes the listings. The next request thus cannot use the prompt cache. Do not switch often.
 
+## Switch the effort or the model for a session
+
+These commands change the setting for the current session only. Your settings do not change.
+
+| Command | Result |
+| --- | --- |
+| `/loadout effort on` | The plugin picks the effort for each prompt, from the next prompt. |
+| `/loadout effort off` | The next prompts use the effort of the session. |
+| `/loadout model on` | The plugin picks the model from the first prompt. After the first prompt, this does nothing. |
+| `/loadout model off` | The next requests go to the model of the session. The cache is built again one time. |
+
+`/loadout` shows the setting for this session. A new session or `/clear` starts again with your settings. If the
+effort is fixed (see above), `/loadout effort off` keeps it, to keep the cache valid.
+
 ## Later prompts
 
 The listings do not change after the first request. If a later prompt needs a hidden item, the plugin adds a note
@@ -113,6 +127,70 @@ to that prompt only. The note names the item and tells Claude how to load it.
 If the plugin does not name an item, Claude can still find it. Claude searches with ToolSearch for a tool, and with
 SearchSkills for a skill.
 
+## New task in the same session
+
+The same call also compares a later prompt with your last three prompts. If the prompt starts a different task, a
+toast tells you. The toast suggests a new session or `/clear`. Claude does not see it.
+
+A new session gets its own loadout for the new task. Its context also starts small, so each request costs less.
+
+To turn the check off, set the option `newTaskNote` to `false`:
+
+```json
+{
+  "pluginConfigs": {
+    "loadout": { "options": { "newTaskNote": false } }
+  }
+}
+```
+
+## Effort for each prompt
+
+The plugin can lower the effort for a prompt that does not need much thinking. Less thinking costs fewer tokens. To
+turn this on, set the option `effortPerPrompt` to `true`:
+
+```json
+{
+  "pluginConfigs": {
+    "loadout": { "options": { "effortPerPrompt": true } }
+  }
+}
+```
+
+For each prompt that you send, the classifier picks a level from `low` to `max`. It reads the prompt and your last
+three prompts.
+
+- The plugin never goes above the effort of the session. If the session runs at `medium`, a pick of `max` gives
+  `medium`.
+- The effort applies to all requests of the turn. Subagents keep their own effort.
+- The plugin changes the effort only on models that keep the prompt cache when the effort changes: Sonnet 5.5,
+  Opus 5.5, Opus 5, Fable 5.1, Mythos 5.1 and Haiku 5.5. On other models, a change of effort invalidates the full
+  cache, so the plugin does not change it.
+- If a request after a change loses most of the prompt cache, the plugin keeps the current effort for the rest of the
+  session. `/loadout` then shows `Effort: <level> (fixed: ...)`. A pause of more than 5 minutes or a change of model
+  also loses the cache. After these, the plugin does not do this check.
+- `/loadout` shows the effort of the newest prompt.
+
+## Model for the session
+
+The plugin can suggest a smaller model for a session with a small task. To turn this on, set the option
+`modelForSession` to `true`. You can use it together with `effortPerPrompt`.
+
+The classifier reads your first prompt and picks a model. If that model is smaller than the model of the session,
+Claude Code asks you before the first request. If you approve, the plugin sends all main requests of the session to
+that model. Later prompts can change the effort only.
+
+- The plugin only goes down in this order: Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5. On other models, and on a
+  model with a larger context (for example `[1m]`), it does not ask.
+- If you close the question, or no one can answer it (a `-p` run), the session keeps its model.
+- Subagents keep their own model. A subagent that uses the model of the session runs on the model of the session,
+  not on the smaller model.
+- If you change the model with `/model` later, or run `/loadout off`, the plugin stops changing the model for the
+  rest of the session. This also occurs when Claude Code changes the model itself (a fallback).
+- The plugin cannot change the model of the session itself. The status line, `/model` and the system prompt still
+  show the model of the session. The footer shows the model that answers, for example `sonnet-5-5 (loadout)`.
+  `/loadout` shows it too.
+
 ## Cost
 
 The classifier runs on Haiku with low effort.
@@ -121,6 +199,12 @@ The classifier runs on Haiku with low effort.
 | --- | --- | --- |
 | First prompt | One call for the tool listing and one call for the skill listing | 10 seconds each |
 | A server connects after the first prompt | One call for its tool group | 10 seconds |
-| Each later prompt, while hidden items are left to name | One call | 5 seconds |
+| Each later prompt | One call. With `newTaskNote` off, only while hidden items are left to name. | 5 seconds |
+| Each prompt, with `effortPerPrompt` on | One more call, at the same time as the other calls | 5 seconds |
+| First prompt, with `modelForSession` on | One more call, before the question to you | 5 seconds |
 
-A later prompt waits for its call. If the call fails or reaches its time limit, the prompt continues with no note.
+While hidden items are left to name, a later prompt waits for its call. Otherwise the call runs in the background.
+If the call fails or reaches its time limit, the prompt continues with no note and no toast.
+
+With `effortPerPrompt` on, the first request of a turn waits for the effort call. If the call fails, the request keeps
+the effort of the session.

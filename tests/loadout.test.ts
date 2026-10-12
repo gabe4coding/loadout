@@ -1,5 +1,6 @@
 import type { On } from 'claude-code'
-import { expect, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 import { parseTools } from '../hooks/scope'
 
@@ -57,11 +58,14 @@ function answer(text: string) {
 }
 
 // The engine's own ui.status, ui.invalidate and ui.toast, which the kit
-// leaves out.
-function quiet(on: On): void {
+// leaves out. Each toast text goes into `toasts`.
+function quiet(on: On, toasts: string[] = []): void {
   on('ui.status', () => ({ value: undefined }))
   on('ui.invalidate', () => ({ value: undefined }))
-  on('ui.toast', () => ({ value: undefined }))
+  on('ui.toast', ($, e) => {
+    toasts.push(String(e.text))
+    return { value: undefined }
+  })
 }
 
 // The plugin's store across sessions. Returns what it holds, for checks.
@@ -161,6 +165,357 @@ test('names hidden tools a later prompt needs, once, without changing the lists'
   expect(seen[2]?.join('\n')).toContain('datadog (2 tools): search_logs, get_trace')
   expect(seen[2]?.join('\n')).toContain('ToolSearch')
   expect(seen[3]).toEqual([])
+})
+
+test('tells the person when a later prompt starts a new task, and leaves the prompt as it is', async ($, on) => {
+  const seen: string[][] = []
+  const asked: string[] = []
+  const toasts: string[] = []
+  on('prompt.submit', ($, e) => {
+    seen.push([...(e.context ?? [])])
+    return { text: e.text }
+  })
+  on('prompt.attachment', ($, e) => ({ text: e.text }))
+  quiet(on, toasts)
+  listed(on)
+  on('model.complete', ($, e) => {
+    const prompt = String(e.prompt)
+    asked.push(prompt)
+    const newest = /<prompt>([\s\S]*)<\/prompt>/.exec(prompt)?.[1]
+    return answer(newest === undefined ? 'claude_in_chrome' : newest.includes('invoice') ? 'NEW TASK' : 'none')
+  })
+
+  await $.prompt.submit({ text: 'Check the login page in the browser', wait: false, origin: COMPOSER } as never)
+  await $.prompt.attachment({ type: 'deferred_tools_delta', text: TOOLS, origin: ENGINE } as never)
+  await $.prompt.submit({ text: 'Now fix the button color', wait: false, origin: COMPOSER } as never)
+  await $.prompt.submit({ text: 'Write a script that totals the invoice files', wait: false, origin: COMPOSER } as never)
+
+  expect(toasts).toHaveLength(1)
+  expect(toasts[0]).toContain('new task')
+  expect(seen[2]).toEqual([])
+  const last = asked.at(-1) ?? ''
+  expect(last).toContain('<earlier>\nCheck the login page in the browser\n</earlier>')
+  expect(last).toContain('<earlier>\nNow fix the button color\n</earlier>')
+})
+
+test('with nothing left to name, checks the task without holding the prompt', async ($, on) => {
+  const seen: string[][] = []
+  const toasts: string[] = []
+  on('prompt.submit', ($, e) => {
+    seen.push([...(e.context ?? [])])
+    return { text: e.text }
+  })
+  on('prompt.attachment', ($, e) => ({ text: e.text }))
+  quiet(on, toasts)
+  listed(on)
+  const clock = mock.clock(on)
+  on('model.complete', ($, e) =>
+    answer(String(e.prompt).includes('<prompt>') ? 'NEW TASK' : 'claude_in_chrome\ndatadog\nslack'),
+  )
+
+  await $.prompt.submit({ text: 'Check the login page in the browser', wait: false, origin: COMPOSER } as never)
+  await $.prompt.attachment({ type: 'deferred_tools_delta', text: TOOLS, origin: ENGINE } as never)
+  await $.prompt.submit({ text: 'Write a script that totals the invoice files', wait: false, origin: COMPOSER } as never)
+  // The check runs after the prompt: let it settle.
+  await clock.advance(0)
+
+  expect(seen[1]).toEqual([])
+  expect(toasts).toHaveLength(1)
+})
+
+test('with newTaskNote off, checks no task and asks nothing when nothing is hidden', { options: { newTaskNote: false } }, async ($, on) => {
+  const asked: string[] = []
+  const toasts: string[] = []
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  quiet(on, toasts)
+  listed(on)
+  on('model.complete', ($, e) => {
+    asked.push(String(e.prompt))
+    return answer('NEW TASK')
+  })
+
+  await $.prompt.submit({ text: 'Check the login page in the browser', wait: false, origin: COMPOSER } as never)
+  await $.prompt.submit({ text: 'Write a script that totals the invoice files', wait: false, origin: COMPOSER } as never)
+
+  expect(asked).toEqual([])
+  expect(toasts).toEqual([])
+})
+
+// The engine's request beneath turn.step: records what `of` reads from each
+// request (its effort by default), and answers with the cache use that
+// `cache` gives.
+function requests(
+  on: On,
+  cache: () => { read: number; written: number } = () => ({ read: 1000, written: 100 }),
+  of: (e: { model: string; effort?: unknown }) => unknown = e => e.effort,
+): unknown[] {
+  const sent: unknown[] = []
+  on('turn.step', async function* ($, e) {
+    sent.push(of(e))
+    const { read, written } = cache()
+    const usage = { model: e.model, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: read, cache_creation_input_tokens: written }
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage } as never
+  })
+  return sent
+}
+
+// One main request (or a subagent's, with `agentId`), read to its end.
+async function step($: Engine, turnId: string, more: Record<string, unknown> = {}): Promise<void> {
+  const stream = $.turn.step({ turnId, index: 0, model: 'claude-sonnet-5-5', effort: 'high', messageCount: 3, ...more } as never)
+  for await (const _ of stream);
+}
+
+// The classifier: `level` for the pick whose system names `marker` (the
+// effort by default), the first group for the rest.
+function picks(on: On, level: () => string, marker = 'reasoning effort'): void {
+  on('model.complete', ($, e) => answer(String(e.system).includes(marker) ? level() : 'claude_in_chrome'))
+}
+
+test('sets the picked effort on the main requests only, never above the session effort', { options: { effortPerPrompt: true } }, async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on)
+  const sent = requests(on)
+  let level = 'low'
+  picks(on, () => level)
+
+  await $.prompt.submit({ text: 'What does this function return?', wait: false, origin: COMPOSER } as never)
+  await step($, 't1')
+  await step($, 't1', { agentId: 'sub' })
+  await step($, 't1', { model: 'claude-sonnet-5' })
+  level = 'max'
+  await $.prompt.submit({ text: 'Redesign the storage layer', wait: false, origin: COMPOSER } as never)
+  await step($, 't2')
+
+  expect(sent).toEqual(['low', 'high', 'high', 'high'])
+})
+
+test('keeps the effort for the session once a change lost the cache', { options: { effortPerPrompt: true } }, async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on)
+  mock.clock(on)
+  let cache = { read: 1000, written: 100 }
+  const sent = requests(on, () => cache)
+  let level = 'low'
+  picks(on, () => level)
+
+  await $.prompt.submit({ text: 'What does this function return?', wait: false, origin: COMPOSER } as never)
+  await step($, 't1')
+  level = 'medium'
+  cache = { read: 0, written: 1200 }
+  await $.prompt.submit({ text: 'Fix the failing test', wait: false, origin: COMPOSER } as never)
+  await step($, 't2')
+  level = 'low'
+  cache = { read: 1200, written: 50 }
+  await $.prompt.submit({ text: 'And rename it', wait: false, origin: COMPOSER } as never)
+  await step($, 't3')
+
+  await $.command.run(run('effort off'))
+  await step($, 't4')
+
+  expect(sent).toEqual(['low', 'medium', 'medium', 'medium'])
+  expect((await $.command.run(run(''))).text).toContain('Effort: medium (fixed')
+})
+
+test('does not keep the effort when the cache was lost to a pause or a change of model', { options: { effortPerPrompt: true } }, async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on)
+  const clock = mock.clock(on)
+  let cache = { read: 1000, written: 100 }
+  const sent = requests(on, () => cache)
+  let level = 'low'
+  picks(on, () => level)
+
+  await $.prompt.submit({ text: 'What does this function return?', wait: false, origin: COMPOSER } as never)
+  await step($, 't1')
+  await clock.advance(10 * 60 * 1000)
+  level = 'medium'
+  cache = { read: 0, written: 1200 }
+  await $.prompt.submit({ text: 'Fix the failing test', wait: false, origin: COMPOSER } as never)
+  await step($, 't2')
+  level = 'low'
+  await $.prompt.submit({ text: 'Now on the other model', wait: false, origin: COMPOSER } as never)
+  await step($, 't3', { model: 'claude-opus-5-5' })
+  level = 'medium'
+  cache = { read: 1200, written: 50 }
+  await $.prompt.submit({ text: 'And rename it', wait: false, origin: COMPOSER } as never)
+  await step($, 't4', { model: 'claude-opus-5-5' })
+
+  expect(sent).toEqual(['low', 'medium', 'low', 'medium'])
+  expect((await $.command.run(run(''))).text).not.toContain('(fixed')
+})
+
+// The classifier picks `tier` for the model; the session runs `session`; the
+// person answers the model question with the option that starts with `pick`.
+// Returns the questions asked.
+function routed(on: On, tier: string, pick: 'Use' | 'Keep', session: () => string = () => 'claude-opus-5-5'): string[] {
+  const asked: string[] = []
+  on('session.model', () => ({ value: session() }))
+  picks(on, () => tier, 'choose the model')
+  on('tool.call', ($, e, next) => {
+    if (e.tool !== 'AskUserQuestion') return next(e)
+    const question = (e as never as { questions: { question: string; options: { label: string }[] }[] }).questions[0]
+    asked.push(question?.question ?? '')
+    const label = question?.options.find(option => option.label.startsWith(pick))?.label ?? ''
+    return { result: { questions: [question], answers: { [question?.question ?? '']: label } } } as never
+  })
+  return asked
+}
+
+// The footer's mode labels as the engine gets them from the plugin: `draw`
+// renders the footer with the label `focus` and returns them.
+function footer(on: On): ($: Engine) => Promise<readonly string[]> {
+  let modes: readonly string[] = []
+  on('ui.render', { component: 'SessionMode' }, ($, e) => {
+    modes = e.props.modes
+    return { type: 'Text', children: [] } as never
+  })
+  return async $ => {
+    await $.ui.render({ surface: 'terminal', component: 'SessionMode', requestId: 'mode', props: { modes: ['focus'] } } as never)
+    return modes
+  }
+}
+
+test('sends the session to the model the person approved, until they change it', { options: { modelForSession: true } }, async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on)
+  const asked = routed(on, 'sonnet', 'Use')
+  const draw = footer(on)
+  const models = requests(on, undefined, e => e.model)
+
+  await $.prompt.submit({ text: 'Add a test for the parser', wait: false, origin: COMPOSER } as never)
+  await step($, 't1', { model: 'claude-opus-5-5' })
+  await step($, 't1', { model: 'claude-opus-5-5', agentId: 'sub' })
+  await $.prompt.submit({ text: 'Now run it', wait: false, origin: COMPOSER } as never)
+  await step($, 't2', { model: 'claude-opus-5-5' })
+  expect((await $.command.run(run(''))).text).toContain('Model: claude-sonnet-5-5')
+  expect(await draw($)).toEqual(['focus', 'sonnet-5-5 (loadout)'])
+  await step($, 't3', { model: 'claude-fable-5-1' })
+  await step($, 't4', { model: 'claude-opus-5-5' })
+  expect(await draw($)).toEqual(['focus'])
+
+  expect(asked.length).toBe(1)
+  expect(asked[0]).toContain('claude-sonnet-5-5')
+  expect(models).toEqual(['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-fable-5-1', 'claude-opus-5-5'])
+})
+
+test('/model ends the model change at once', { options: { modelForSession: true } }, async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on)
+  let session = 'claude-opus-5-5'
+  routed(on, 'haiku', 'Use', () => session)
+  const draw = footer(on)
+  on('command.run', { command: 'model' }, ($, e) => {
+    session = 'claude-sonnet-5-5'
+    return { text: 'Set model to Sonnet 5.5' } as never
+  })
+
+  await $.prompt.submit({ text: 'What is 2+2?', wait: false, origin: COMPOSER } as never)
+  expect(await draw($)).toEqual(['focus', 'haiku-5-5 (loadout)'])
+  await $.command.run({ command: 'model', args: 'sonnet', origin: COMPOSER } as never)
+
+  expect(await draw($)).toEqual(['focus'])
+  expect((await $.command.run(run(''))).text).not.toContain('Model:')
+})
+
+test('/loadout off sends the next requests to the session model', { options: { modelForSession: true } }, async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on)
+  routed(on, 'haiku', 'Use')
+  const models = requests(on, undefined, e => e.model)
+
+  await $.prompt.submit({ text: 'What is 2+2?', wait: false, origin: COMPOSER } as never)
+  await step($, 't1', { model: 'claude-opus-5-5' })
+  await $.command.run(run('off'))
+  await step($, 't2', { model: 'claude-opus-5-5' })
+  await $.command.run(run('on'))
+  await step($, 't3', { model: 'claude-opus-5-5' })
+
+  expect(models).toEqual(['claude-haiku-5-5', 'claude-opus-5-5', 'claude-opus-5-5'])
+})
+
+test('keeps the session model when the person says no, or the pick is not smaller', { options: { modelForSession: true } }, async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on)
+  const asked = routed(on, 'haiku', 'Keep', () => 'claude-sonnet-5-5')
+  const models = requests(on, undefined, e => e.model)
+
+  await $.prompt.submit({ text: 'What does this function return?', wait: false, origin: COMPOSER } as never)
+  await step($, 't1', { model: 'claude-sonnet-5-5' })
+
+  expect(asked.length).toBe(1)
+  expect(models).toEqual(['claude-sonnet-5-5'])
+})
+
+test('asks nothing when the picked model is not smaller than the session model', { options: { modelForSession: true } }, async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on)
+  const asked = routed(on, 'opus', 'Use', () => 'claude-sonnet-5-5')
+
+  await $.prompt.submit({ text: 'Redesign the storage layer', wait: false, origin: COMPOSER } as never)
+
+  expect(asked).toEqual([])
+})
+
+test('/loadout effort on and off switch the effort for this session', async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on)
+  const sent = requests(on)
+  picks(on, () => 'low')
+
+  expect((await $.command.run(run(''))).text).toContain('Effort for each prompt: off, Model for the session: off')
+  expect((await $.command.run(run('effort on'))).text).toContain('is on')
+  await $.prompt.submit({ text: 'What does this function return?', wait: false, origin: COMPOSER } as never)
+  await step($, 't1')
+  await $.command.run(run('effort off'))
+  await $.prompt.submit({ text: 'And this one?', wait: false, origin: COMPOSER } as never)
+  await step($, 't2')
+
+  expect(sent).toEqual(['low', 'high'])
+  expect((await $.command.run(run(''))).text).not.toContain('Effort: low')
+  expect((await $.command.run(run('effort'))).text).toContain('Type "/loadout effort on"')
+})
+
+test('/loadout model on before the first prompt, and off later', async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on)
+  const asked = routed(on, 'haiku', 'Use')
+  const draw = footer(on)
+  const models = requests(on, undefined, e => e.model)
+
+  await $.command.run(run('model on'))
+  await $.prompt.submit({ text: 'What is 2+2?', wait: false, origin: COMPOSER } as never)
+  await step($, 't1', { model: 'claude-opus-5-5' })
+  expect((await $.command.run(run('model off'))).text).toContain('is off')
+  expect(await draw($)).toEqual(['focus'])
+  await step($, 't2', { model: 'claude-opus-5-5' })
+  expect((await $.command.run(run('model on'))).text).toContain('first prompt only')
+  await step($, 't3', { model: 'claude-opus-5-5' })
+
+  expect(asked.length).toBe(1)
+  expect(models).toEqual(['claude-haiku-5-5', 'claude-opus-5-5', 'claude-opus-5-5'])
+})
+
+test('leaves the effort alone when effortPerPrompt is off', async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on)
+  const sent = requests(on)
+  picks(on, () => 'low')
+
+  await $.prompt.submit({ text: 'What does this function return?', wait: false, origin: COMPOSER } as never)
+  await step($, 't1')
+
+  expect(sent).toEqual(['high'])
 })
 
 // With tool search off, Claude Code puts every MCP tool in the prompt and

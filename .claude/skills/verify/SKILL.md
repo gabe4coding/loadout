@@ -58,6 +58,8 @@ costs about $0.01.
   (`isScoped: false`), and no note comes. The real prompt cannot set the loadout: the first request already sent the
   listings.
 - A prompt that names nothing hidden: `recall` must name nothing, and `notes` stays empty.
+- A follow-up, then a prompt with an unrelated goal: `recall` has `isNewTask: false`, then `true`. Run it once more
+  after a whitespace first prompt: with nothing hidden the check runs in the background and still writes `recall`.
 - `--no-tool-search`: no deferred tool listing. The plugin must not fail, and the instructions of a server whose
   tools are in the prompt must stay.
 

@@ -1,7 +1,7 @@
 // Pure text work: parse the listings the engine injects, group their entries,
 // and rebuild them with only the groups the classifier kept.
 
-import type { ServerFact, SkillFact } from '../types'
+import type { Effort, ModelTier, ServerFact, SkillFact } from '../types'
 
 // A deferred tool line is one bare name; an MCP tool is mcp__<server>__<tool>.
 const TOOL_LINE = /^[A-Za-z0-9_.:-]+$/
@@ -205,6 +205,63 @@ export function parseKept(reply: string, groups: readonly string[]): string[] {
     .split(/[\n,]/)
     .map(part => part.trim().replace(/^[-*\s`"]+|[`"\s]+$/g, ''))
     .filter(part => known.has(part))
+}
+
+// The first line of a later prompt's reply says if the prompt starts a new task.
+export function isNewTask(reply: string): boolean {
+  const first = reply.trim().split('\n')[0] ?? ''
+  return /^[-*\s`"]*new task[`"\s.:]*$/i.test(first)
+}
+
+const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
+// From the smallest model to the largest.
+const MODEL_ID: Record<ModelTier, string> = {
+  haiku: 'claude-haiku-5-5',
+  sonnet: 'claude-sonnet-5-5',
+  opus: 'claude-opus-5-5',
+  fable: 'claude-fable-5-1',
+}
+const MODELS = Object.keys(MODEL_ID) as ModelTier[]
+
+const wordOf = (words: readonly string[]) => new RegExp(`(?<![a-z])(${words.join('|')})(?![a-z])`, 'gi')
+const EFFORT_WORD = wordOf(EFFORTS)
+const MODEL_WORD = wordOf(MODELS)
+
+// The one word that a reply names, or null when it names none or several.
+function oneWord<T extends string>(reply: string, pattern: RegExp): T | null {
+  const named = new Set([...reply.matchAll(pattern)].map(match => match[1]?.toLowerCase() as T))
+  return named.size === 1 ? ([...named][0] ?? null) : null
+}
+
+export function parseEffort(reply: string): Effort | null {
+  return oneWord(reply, EFFORT_WORD)
+}
+
+export function parseModel(reply: string): ModelTier | null {
+  return oneWord(reply, MODEL_WORD)
+}
+
+// The model to send instead of the session's: the pick, when it is a smaller
+// model of the same family. Null keeps the session's model: a pick at or above
+// it, or a session model out of the family (also one with a larger context,
+// such as `[1m]`, that the smaller model may not have).
+export function routeModel(picked: ModelTier, session: string): string | null {
+  const ceiling = MODELS.findIndex(tier => MODEL_ID[tier] === session)
+  return MODELS.indexOf(picked) < ceiling ? MODEL_ID[picked] : null
+}
+
+// The lower of two levels: the plugin may lower the session's effort, never
+// raise it. Null when the session's effort is not a level (a number).
+export function capEffort(picked: Effort, session: string | number): Effort | null {
+  const ceiling = EFFORTS.indexOf(session as Effort)
+  if (ceiling === -1) return null
+  return EFFORTS[Math.min(EFFORTS.indexOf(picked), ceiling)] ?? null
+}
+
+// The models that take the effort in a message (per-turn control), so a change
+// keeps the prompt cache. On other models a change rebuilds the whole cache.
+export function takesTurnEffort(model: string): boolean {
+  return /^claude-(sonnet-5-5|opus-5-5|opus-5|fable-5-1|mythos-5-1|haiku-5-5)(?![-.\d])/.test(model)
 }
 
 export function rebuild(

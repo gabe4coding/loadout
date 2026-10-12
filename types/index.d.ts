@@ -6,6 +6,22 @@ export type Choice = { kept: string[]; hidden: string[]; always: string[] }
 // matched against.
 export type Offer = { kind: 'tools' | 'skills'; group: string; row: string }
 
+export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+export type ModelTier = 'haiku' | 'sonnet' | 'opus' | 'fable'
+
+// The model change the person approved at the first prompt: the main requests
+// on the session's model `from` go to `to`.
+export type Route = { from: string; to: string }
+
+// The effort and model changes, on or off.
+export type Switches = { effort: boolean; model: boolean }
+
+// The effort the plugin sets on the main requests. `level` is the latest pick,
+// null before the first. `isFrozen` is true once a change lost the cache: the
+// effort then stays for the rest of the session.
+export type EffortState = { level: Effort | null; isFrozen: boolean }
+
 // One MCP server as the picker shows it. `group` is the normalized server
 // name; `label` the name a person knows; `tools` the short tool names.
 export type ServerFact = { group: string; label: string; tools: string[]; tokens: number }
@@ -22,6 +38,14 @@ declare module 'claude-code' {
       isOff: boolean
       offers: Offer[]
       surfaced: string[]
+      // The last prompts of the person, newest last, for the new-task check
+      // and the effort pick.
+      recent: string[]
+      effort: EffortState
+      route: Route | null
+      // `/loadout effort|model on|off` for this session; a missing key leaves
+      // it to the option.
+      switches: Partial<Switches>
       // The alwaysKeep names as the first prompt found them. A server that
       // connects later in the session gets the same names.
       pinned: string[]
