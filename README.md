@@ -34,6 +34,7 @@ selects the items from your first prompt.
 - **Nothing breaks**: a hidden item still works. Claude finds it with ToolSearch or SearchSkills.
 - **Valid prompt cache**: the listings change one time, before the first request. A later prompt gets a short note
   instead.
+- **Always keep**: put the skills and servers that help with each task on a list. The plugin never hides them.
 - **Safe failure**: if the classifier fails, the plugin keeps all items.
 
 ## Quick start
@@ -67,7 +68,7 @@ tells Claude to load the Datadog tools with ToolSearch.
 | Page | |
 | --- | --- |
 | [Installation](docs/installation.mdx) | Requirements, install, local folder, update |
-| [Usage](docs/usage.mdx) | The first prompt, `/loadout`, later prompts, cost |
+| [Usage](docs/usage.mdx) | The first prompt, the always-keep list, `/loadout`, later prompts, cost |
 | [How it works](docs/how-it-works.mdx) | One session from start to end, the prompt cache, the data sent |
 | [Troubleshooting](docs/troubleshooting.mdx) | Common problems and known limits |
 | [Development](docs/development.mdx) | Layout, checks, releases |

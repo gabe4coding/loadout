@@ -22,6 +22,9 @@ The plugin sets the loadout from the first prompt. Send a prompt, then type `/lo
 
 Claude can load each hidden item. Ask Claude to search with ToolSearch for a tool, or with SearchSkills for a skill.
 
+If Claude needs an item for each task, put it on the always-keep list with `/loadout keep <name>`. See
+[Always keep an item](./usage.mdx#always-keep-an-item).
+
 If the loadout is wrong for the full task, type `/loadout off`. Then start a new session with a first prompt that names
 the full task.
 
@@ -48,7 +51,7 @@ Add this entry to `~/.claude/settings.json`:
 
 | `event` | When | Fields |
 | --- | --- | --- |
-| `listing` | The plugin gets a tool listing or a skill listing | `type`, `isScoped`, `kept`, `hidden` |
+| `listing` | The plugin gets a tool listing or a skill listing | `type`, `isScoped`, `kept`, `alwaysKept`, `hidden` |
 | `mcp_instructions` | The plugin gets the MCP server instructions | `where`, `removed` |
 | `recall` | The plugin checks a later prompt | `named` |
 
