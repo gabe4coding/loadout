@@ -1,0 +1,11 @@
+{
+  "name": "dynamic-profiles",
+  "owner": { "name": "Gabriele Pavanello" },
+  "plugins": [
+    {
+      "name": "context-scope",
+      "source": "./",
+      "description": "Reads the first prompt of a session and hides the deferred tools, skills and MCP instructions it does not need"
+    }
+  ]
+}

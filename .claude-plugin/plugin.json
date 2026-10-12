@@ -1,0 +1,6 @@
+{
+  "name": "context-scope",
+  "version": "0.1.0",
+  "description": "Reads the first prompt of a session and hides the deferred tools, skills and MCP instructions it does not need",
+  "types": "./types/index.d.ts"
+}
