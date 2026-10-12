@@ -1,49 +1,75 @@
 # context-scope
 
-A Claude Code mod that makes the session setup smaller.
+<p align="center">
+  A Claude Code plugin that makes the start of each session smaller.
+  It reads your first prompt and hides the tools, skills and MCP server instructions that the task does not need.
+</p>
 
-At the start of a session, Claude reads long lists: deferred tools, skills and MCP server instructions. Most of them are not related to the task. This mod reads your first prompt and removes the items that the task does not need.
+<p align="center">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/gabe4coding/dynamic-profiles?color=blue"></a>
+  <a href="docs/installation.mdx"><img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-D97757?logo=claude&logoColor=white"></a>
+  <a href="https://github.com/gabe4coding/dynamic-profiles/actions/workflows/test.yml"><img alt="Tests" src="https://github.com/gabe4coding/dynamic-profiles/actions/workflows/test.yml/badge.svg"></a>
+</p>
 
-## How it works
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="docs/usage.mdx">Usage</a> ·
+  <a href="docs/how-it-works.mdx">How it works</a> ·
+  <a href="docs/troubleshooting.mdx">Troubleshooting</a>
+</p>
 
-1. The mod saves the first prompt of the session.
-2. It sends the prompt and a short catalog to Haiku. The catalog has the MCP tools in groups by server, and each skill.
-3. Haiku replies with the items to keep. If the call fails, the mod keeps all items.
-4. The mod removes the other items from:
-   - the deferred tool list (built-in tools always stay)
-   - the skill list
-   - the MCP server instructions of the hidden servers
-5. Each list gets a note: hidden items still work, and Claude can find them with ToolSearch or SearchSkills.
+---
 
-On a later prompt, the mod does not change the lists, because that would make the prompt cache invalid. It asks Haiku if the new prompt needs a hidden item. If yes, it adds a note to that prompt only, which tells Claude how to load the item. The mod names each item one time per session.
+At session start, Claude reads long listings before it reads your prompt: deferred tools, skills and MCP server
+instructions. With many servers and plugins, these listings are a large part of each request. Most of the items
+are not related to your task.
 
-## Commands
+Without context-scope, you turn off servers and plugins by hand for each task. With context-scope, the plugin
+selects the items from your first prompt.
 
-- `/scope`: shows the kept items, the hidden items and the items named to later prompts.
-- `/scope off`: puts the full lists back for this session.
-- `/scope on`: turns the mod on again.
+- **Smaller requests**: the plugin removes the tool groups, skills and server instructions that the task does not
+  need.
+- **Nothing breaks**: a hidden item still works. Claude finds it with ToolSearch or SearchSkills.
+- **Valid prompt cache**: the listings change one time, before the first request. A later prompt gets a short note
+  instead.
+- **Safe failure**: if the classifier fails, the plugin keeps all items.
 
-## Install
+## Quick start
 
-Run these commands in a terminal:
+You need Claude Code 2.1.296 or later.
 
-```bash
-claude plugin marketplace add /Users/gpavanello/Repositories/dynamic-profiles
-claude plugin install context-scope@dynamic-profiles --scope user
+Type these commands at the prompt of a Claude Code session:
+
+```
+/plugin marketplace add gabe4coding/dynamic-profiles
+/plugin install context-scope@dynamic-profiles
 ```
 
-Claude Code reads the mod from this folder. After you change a file, run `/reload-plugins` in an open session.
+Start a new session and write your task. Then type `/scope` to see the items that the plugin kept and hid.
 
-## Development
+## Example
 
-```bash
-claude plugin validate .
-claude plugin test .
+You start a session with this prompt: *"Check the login page in the browser and fix the layout bug."*
+
+The plugin keeps the browser tools and hides the other tool groups. The tool listing then ends with this note:
+
+```
+(context-scope hid 249 more deferred tools that look unrelated to this task, from: datadog (230), slack (19). They still work: ToolSearch finds them by keyword.)
 ```
 
-## Files
+Later, you write: *"Now look at the error logs in Datadog."* The plugin adds a note to this prompt only. The note
+tells Claude to load the Datadog tools with ToolSearch.
 
-- `hooks/register.ts`: the hooks, the Haiku calls and `/scope`
-- `hooks/scope.ts`: reads and rebuilds the lists
-- `hooks/scope.test.ts`: the tests
-- `types/index.d.ts`: the state the mod keeps for the session
+## Documentation
+
+| Page | |
+| --- | --- |
+| [Installation](docs/installation.mdx) | Requirements, install, local folder, update |
+| [Usage](docs/usage.mdx) | The first prompt, `/scope`, later prompts, cost |
+| [How it works](docs/how-it-works.mdx) | One session from start to end, the prompt cache, the data sent |
+| [Troubleshooting](docs/troubleshooting.mdx) | Common problems and known limits |
+| [Development](docs/development.mdx) | Layout, checks, releases |
+
+## License
+
+MIT. See [LICENSE](LICENSE).

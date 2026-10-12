@@ -1,0 +1,65 @@
+---
+title: Usage
+description: How the first prompt sets the scope, what /scope shows, and what happens on later prompts.
+---
+
+# Usage
+
+You do not run the plugin. It works on each session from the first prompt.
+
+## Write a clear first prompt
+
+The first prompt sets the scope for the full session. The classifier sees only this prompt and a short list of the
+items.
+
+- Name the task and the systems it touches, for example "Find the cause of the 500 errors in Datadog and fix the
+  handler".
+- If the task will grow, say so in the first prompt, for example "then open a pull request".
+- A prompt with only whitespace does not set the scope. The next prompt does.
+
+The classifier keeps generously. It keeps each item that can help with the task or its next steps.
+
+## See the scope
+
+Type `/scope`. The command shows these lines:
+
+| Line | Meaning |
+| --- | --- |
+| Tool groups kept | The servers whose tools stay in the tool listing |
+| Tool groups hidden | The servers whose tools the plugin hid |
+| Skills kept | The skills that stay in the skill listing |
+| Skills hidden | The number of hidden skills |
+| Named to later prompts | The hidden items that a note named to Claude after a later prompt |
+
+The plugin always keeps the deferred tools of Claude Code itself, for example `WebFetch` and `CronCreate`.
+
+## Turn it off for a session
+
+Type `/scope off`. The next request has the full listings again. Type `/scope on` to scope the session again.
+
+Each switch changes the listings. The next request thus cannot use the prompt cache. Do not switch often.
+
+## Later prompts
+
+The listings do not change after the first request. If a later prompt needs a hidden item, the plugin adds a note
+to that prompt only. The note names the item and tells Claude how to load it.
+
+- The plugin names each hidden item one time per session.
+- The plugin checks only the prompts that you send. Background notifications and messages from other sessions do
+  not get a check.
+- The status line shows the named items, for example `scope: pointed to datadog`.
+
+If the plugin does not name an item, Claude can still find it. Claude searches with ToolSearch for a tool, and with
+SearchSkills for a skill.
+
+## Cost
+
+The classifier runs on Haiku with low effort.
+
+| When | Calls | Time limit |
+| --- | --- | --- |
+| First prompt | One call for the tool listing and one call for the skill listing | 10 seconds each |
+| A server connects after the first prompt | One call for its tool group | 10 seconds |
+| Each later prompt, while hidden items are left to name | One call | 5 seconds |
+
+A later prompt waits for its call. If the call fails or reaches its time limit, the prompt continues with no note.

@@ -1,0 +1,80 @@
+---
+title: Installation
+description: Install context-scope in Claude Code, check that it works, and keep it up to date.
+---
+
+# Installation
+
+## Requirements
+
+- Claude Code 2.1.296 or later. The plugin uses the hooks module API of Claude Code, which can change between
+  releases.
+- Access to the Haiku model through your Claude Code login. The classifier uses it.
+
+## Install from the marketplace
+
+Type these commands at the prompt of a Claude Code session:
+
+```
+/plugin marketplace add gabe4coding/dynamic-profiles
+/plugin install context-scope@dynamic-profiles
+```
+
+Then start a new session. The plugin scopes a session from its first prompt.
+
+You can also install from a shell:
+
+```bash
+claude plugin marketplace add gabe4coding/dynamic-profiles
+```
+
+```bash
+claude plugin install context-scope@dynamic-profiles --scope user
+```
+
+## Check that it works
+
+1. Start a new session.
+2. Write a prompt for a narrow task, for example a change to one file.
+3. Type `/scope`.
+
+The command lists the tool groups and skills that the plugin kept and hid. The status line also shows a count, for
+example `scope: hid 6 tool groups, 70 skills`.
+
+If `/scope` is not in the command list, the plugin did not load. See
+[The plugin does not load](./troubleshooting.mdx#the-plugin-does-not-load).
+
+## Run from a local folder
+
+To try a change, load the plugin from a clone:
+
+```bash
+claude --plugin-dir /path/to/dynamic-profiles
+```
+
+To use a clone in every session, add the clone as a marketplace and install from it:
+
+```bash
+claude plugin marketplace add /path/to/dynamic-profiles
+```
+
+```bash
+claude plugin install context-scope@dynamic-profiles --scope user
+```
+
+Claude Code then reads the plugin from the clone. After you change a file, run `/reload-plugins` in an open
+session.
+
+## Update
+
+```bash
+claude plugin update context-scope@dynamic-profiles
+```
+
+Then run `/reload-plugins` in each open session, or start a new session.
+
+## Uninstall
+
+```bash
+claude plugin uninstall context-scope@dynamic-profiles
+```

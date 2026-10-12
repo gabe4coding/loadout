@@ -1,0 +1,71 @@
+---
+title: How it works
+description: One session from start to end, the prompt cache, and the data that the plugin sends to Haiku.
+---
+
+# How it works
+
+## The listings
+
+At session start, Claude Code gives Claude three listings:
+
+- The deferred tools: the name of each tool that Claude can load with ToolSearch. MCP tools are most of them.
+- The skills: the name and description of each skill.
+- The MCP server instructions: a block of text for each server that has instructions.
+
+The plugin changes these three listings. It does not change the system prompt, `CLAUDE.md`, memory or the output
+of your own hooks.
+
+## One session
+
+1. You send the first prompt. The plugin keeps its first 4,000 characters for the session.
+2. Claude Code builds the tool listing. The plugin groups the MCP tools by server and sends the groups to the
+   classifier with your prompt.
+3. The classifier replies with the groups to keep. The plugin removes the other groups from the listing and adds a
+   note at the end.
+4. The plugin does the same for the skill listing. Each skill is its own item.
+5. The plugin removes the instruction block of each server whose tool group it hid. A block for a server that the
+   plugin does not know stays.
+6. Claude reads the shorter listings and starts the task.
+
+If a server connects later, the plugin classifies only its tool group. The earlier decisions stay.
+
+## Notes
+
+Each listing that lost items ends with a note. The note gives the number of hidden items and tells Claude how to
+reach them. A hidden tool loads with ToolSearch. A hidden skill runs with the Skill tool, and SearchSkills finds it.
+
+On a later prompt, the classifier compares the prompt with the hidden items. If the prompt needs one, the plugin
+attaches a note to that prompt. You do not see this note. Claude reads it.
+
+## The prompt cache
+
+The listings are in the first message of the conversation. Each request sends this message again. The API reads it
+from the prompt cache only while it does not change.
+
+For this reason, the plugin changes the listings one time, before the first request. A later prompt never changes
+them. The plugin uses a note on that prompt instead, which adds to the end of the conversation.
+
+`/scope off` and `/scope on` change the listings. The request after a switch cannot use the cache.
+
+## Subagents
+
+A subagent gets its own listings. The plugin gives it the same scope as the main session. The classifier does not
+run again for it.
+
+## Data sent to Haiku
+
+The classifier sends these items to Haiku through the API client and login of Claude Code:
+
+- The first 4,000 characters of the first prompt.
+- The names of the hidden-item candidates: up to 10 tool names for each server, and the first 160 characters of
+  each skill entry.
+- On a later prompt, its first 4,000 characters and the rows of the items that are still hidden.
+
+The plugin sends no file contents and no tool results. It stores nothing on disk. Its state lasts for the session
+only.
+
+## Failures
+
+If a classifier call fails, the plugin keeps all items of that listing. If a later prompt check fails, the prompt
+continues with no note. If a hook of the plugin fails, Claude Code skips it and uses the full listing.

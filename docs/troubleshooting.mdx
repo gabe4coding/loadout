@@ -1,0 +1,43 @@
+---
+title: Troubleshooting
+description: Common problems with context-scope and the known limits.
+---
+
+# Troubleshooting
+
+## The plugin does not load
+
+If `/scope` is not in the command list, do these steps:
+
+1. Run `claude plugin list` in a shell. Find `context-scope@dynamic-profiles` and check that its status is
+   `enabled`.
+2. Run `/reload-plugins` in the session, or start a new session.
+3. Start Claude Code with `claude --debug`. Find the lines that start with `context-scope:`. They give the reason.
+
+## `/scope` says that the session is not scoped yet
+
+The plugin sets the scope from the first prompt. Send a prompt, then type `/scope` again.
+
+## Claude cannot find a tool or a skill
+
+Claude can load each hidden item. Ask Claude to search with ToolSearch for a tool, or with SearchSkills for a skill.
+
+If the scope is wrong for the full task, type `/scope off`. Then start a new session with a first prompt that names
+the full task.
+
+## The session is still large
+
+The plugin changes only the three listings. These parts stay as they are:
+
+- The output of your own SessionStart and SubagentStart hooks. To make it smaller, change the hooks.
+- `CLAUDE.md`, memory and the system prompt.
+- The tools that Claude Code always loads, which are not deferred.
+
+## Limits
+
+- The plugin scopes a session from its first prompt only. A task that changes direction keeps the first scope.
+  Later prompts get notes, but the listings do not change.
+- If Claude Code builds a listing before the plugin has the first prompt, that listing is complete. The plugin then
+  does not change it, to keep the prompt cache valid.
+- The classifier sees only names and short descriptions. A server with an unclear name can be hidden by mistake.
+- The plugin uses the hooks module API of Claude Code. A new Claude Code release can change this API.

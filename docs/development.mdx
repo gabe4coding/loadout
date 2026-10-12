@@ -1,0 +1,80 @@
+---
+title: Development
+description: Repo layout, checks and release rules for contributors.
+---
+
+# Development
+
+The full repo is the plugin. Claude Code loads the hooks module from `hooks/hooks.json`.
+
+## Layout
+
+| Path | What it contains |
+| --- | --- |
+| `.claude-plugin/` | The plugin manifest (`plugin.json`) and the marketplace manifest. |
+| `hooks/register.ts` | The hooks, the classifier calls, the notes for later prompts and `/scope`. |
+| `hooks/scope.ts` | Pure helpers: parse a listing, group its items, rebuild it with a note. |
+| `types/index.d.ts` | The state that the plugin keeps for a session. |
+| `tests/` | The tests of the hooks and the checks for docs and versions. |
+| `docs/` | The user docs. |
+
+## Checks
+
+Run all three checks before each commit:
+
+```bash
+claude plugin validate .
+```
+
+```bash
+claude plugin test .
+```
+
+```bash
+node tests/docs.check.mjs
+```
+
+- `claude plugin validate .` reads the manifests and the hooks module as Claude Code does.
+- `claude plugin test .` tests the hooks with a fake host. The tests replace the Haiku call with a fixed reply.
+- `tests/docs.check.mjs` checks the rules for the docs.
+
+CI (`.github/workflows/test.yml`) runs the three checks for each push to `main` and each pull request:
+
+- It runs `claude plugin test .` with a fixed Claude Code version. To use a newer version, run the tests with it on
+  your machine first. Then change the version in the workflow.
+- Each Monday, it also runs `claude plugin test .` with the newest Claude Code release. If this job fails, a new
+  release changed something that the plugin uses. Fix the plugin, then increase the fixed version.
+- For each pull request, it runs `tests/version.check.mjs`. This check fails if the plugin changed and its version
+  did not increase.
+
+## Type check
+
+To develop with the engine types in your editor, load the plugin one time with `claude --plugin-dir .`. Claude Code
+then writes `.claude-plugin/types/`, which `tsconfig.json` uses. Git does not track this folder. Without it, `tsc`
+fails with TS2688. To check the types, run this command:
+
+```bash
+npx -p typescript tsc -p tsconfig.json
+```
+
+CI does not run the type check. Claude Code writes the types only in a session that is logged in, and CI has no
+login.
+
+## Try a change
+
+1. Install the plugin from your clone. See [Run from a local folder](./installation.mdx#run-from-a-local-folder).
+2. Change a file.
+3. Run `/reload-plugins` in an open session, or start a new session.
+4. Type `/scope` to see the result.
+
+## Release
+
+1. Increase `version` in `.claude-plugin/plugin.json`. Claude Code caches a plugin by its version, so without a new
+   version, users do not get the change.
+2. Run the three checks.
+3. Optional: run `node tests/version.check.mjs` to do the version check of CI before you push.
+
+## More
+
+[`CODING_STANDARDS.md`](../CODING_STANDARDS.md) has the full rules for code, tests, the text that the model reads,
+and docs.

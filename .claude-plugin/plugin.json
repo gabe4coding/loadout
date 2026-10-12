@@ -1,6 +1,9 @@
 {
   "name": "context-scope",
-  "version": "0.1.0",
-  "description": "Reads the first prompt of a session and hides the deferred tools, skills and MCP instructions it does not need",
-  "types": "./types/index.d.ts"
+  "version": "0.2.0",
+  "description": "Reads the first prompt of a session and hides the deferred tools, skills and MCP server instructions that the task does not need.",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "gpavanello"
+  }
 }
