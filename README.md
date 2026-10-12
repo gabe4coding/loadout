@@ -1,4 +1,6 @@
-# loadout
+<p align="center">
+  <img src="docs/assets/banner.svg" alt="loadout: equip only what the task needs" width="100%">
+</p>
 
 <p align="center">
   A Claude Code plugin that makes the start of each session smaller.

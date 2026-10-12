@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 400" width="1280" height="400" role="img" aria-label="loadout: Equip only what the task needs.">
+  <title>loadout</title>
+  <rect width="1280" height="400" rx="24" fill="#0A0A0A"/>
+  <rect x="0.5" y="0.5" width="1279" height="399" rx="23.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.1"/>
+
+  <!-- mark -->
+  <g transform="translate(64 120) scale(0.625)">
+    <rect x="52" y="52" width="40" height="40" rx="10" fill="#A78BFA"/>
+    <rect x="109.5" y="53.5" width="37" height="37" rx="8.5" fill="none" stroke="#3F3F46" stroke-width="3"/>
+    <rect x="164" y="52" width="40" height="40" rx="10" fill="#A78BFA"/>
+    <rect x="53.5" y="109.5" width="37" height="37" rx="8.5" fill="none" stroke="#3F3F46" stroke-width="3"/>
+    <rect x="108" y="108" width="40" height="40" rx="10" fill="#A78BFA"/>
+    <rect x="165.5" y="109.5" width="37" height="37" rx="8.5" fill="none" stroke="#3F3F46" stroke-width="3"/>
+    <rect x="53.5" y="165.5" width="37" height="37" rx="8.5" fill="none" stroke="#3F3F46" stroke-width="3"/>
+    <rect x="109.5" y="165.5" width="37" height="37" rx="8.5" fill="none" stroke="#3F3F46" stroke-width="3"/>
+    <rect x="165.5" y="165.5" width="37" height="37" rx="8.5" fill="none" stroke="#3F3F46" stroke-width="3"/>
+  </g>
+
+  <!-- wordmark with cursor -->
+  <g font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace">
+    <text x="244" y="204" font-size="72" font-weight="700" fill="#FAFAFA" letter-spacing="-1">loadout</text>
+    <rect x="556" y="152" width="32" height="58" fill="#A78BFA"/>
+    <text x="248" y="252" font-size="17" fill="#A1A1AA">Equip only what the task needs.</text>
+    <text x="248" y="292" font-size="14" fill="#52525B" letter-spacing="1.5">A CLAUDE CODE PLUGIN</text>
+  </g>
+
+  <!-- panel -->
+  <g transform="translate(790 88)" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="14">
+    <rect width="426" height="272" rx="14" fill="#141414" stroke="#FFFFFF" stroke-opacity="0.08"/>
+    <text x="22" y="40" fill="#FAFAFA"><tspan fill="#A78BFA">›</tspan> fix the login page layout</text>
+    <g>
+      <text x="38" y="76" fill="#A78BFA">keep</text><text x="96" y="76" fill="#FAFAFA">chrome-devtools</text>
+      <text x="38" y="102" fill="#A78BFA">keep</text><text x="96" y="102" fill="#FAFAFA">github</text>
+      <text x="38" y="128" fill="#52525B">hide</text><text x="96" y="128" fill="#71717A">datadog</text>
+      <text x="38" y="154" fill="#52525B">hide</text><text x="96" y="154" fill="#71717A">slack</text>
+      <text x="38" y="180" fill="#52525B">hide</text><text x="96" y="180" fill="#71717A">70 skills</text>
+    </g>
+    <g fill="#52525B" text-anchor="end">
+      <text x="400" y="128">230 tools</text>
+      <text x="400" y="154">19 tools</text>
+    </g>
+    <line x1="22" y1="202" x2="404" y2="202" stroke="#FFFFFF" stroke-opacity="0.08"/>
+    <text x="22" y="236" fill="#A78BFA" font-weight="700">loadout <tspan fill="#FAFAFA" font-weight="400">2 groups kept, 249 tools hidden</tspan></text>
+    <text x="400" y="258" fill="#52525B" text-anchor="end" font-size="12">hidden tools load with ToolSearch</text>
+  </g>
+</svg>

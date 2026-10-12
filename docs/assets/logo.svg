@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="loadout">
+  <title>loadout</title>
+  <!-- a 3x3 grid of slots with three filled: the task equips only a few -->
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="#0A0A0A"/>
+  <rect x="8.5" y="8.5" width="239" height="239" rx="55.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.1"/>
+  <g>
+    <rect x="52" y="52" width="40" height="40" rx="10" fill="#A78BFA"/>
+    <rect x="109.5" y="53.5" width="37" height="37" rx="8.5" fill="none" stroke="#3F3F46" stroke-width="3"/>
+    <rect x="164" y="52" width="40" height="40" rx="10" fill="#A78BFA"/>
+    <rect x="53.5" y="109.5" width="37" height="37" rx="8.5" fill="none" stroke="#3F3F46" stroke-width="3"/>
+    <rect x="108" y="108" width="40" height="40" rx="10" fill="#A78BFA"/>
+    <rect x="165.5" y="109.5" width="37" height="37" rx="8.5" fill="none" stroke="#3F3F46" stroke-width="3"/>
+    <rect x="53.5" y="165.5" width="37" height="37" rx="8.5" fill="none" stroke="#3F3F46" stroke-width="3"/>
+    <rect x="109.5" y="165.5" width="37" height="37" rx="8.5" fill="none" stroke="#3F3F46" stroke-width="3"/>
+    <rect x="165.5" y="165.5" width="37" height="37" rx="8.5" fill="none" stroke="#3F3F46" stroke-width="3"/>
+  </g>
+</svg>
