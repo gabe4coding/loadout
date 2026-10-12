@@ -34,8 +34,18 @@ To add an item, type its name:
 To remove an item, type `/loadout unkeep kb-search`. If a plugin name on the list covers the item, the plugin
 name goes off the list too.
 
-To mark items in a list, type `/loadout pick`. A pane opens with each tool group and skill of the session. Type in
-the filter field to find an item. Press an item to set or clear its mark `[x]`.
+To mark items in a list, type `/loadout pick`. A pane opens with two sections: the tool servers and the skills of the
+session. Each row shows these items:
+
+- The mark: `●` for an item on the list, `○` for an item that is not on the list.
+- The name. A claude.ai connector shows the name of the connector list, for example `claude.ai Slack`.
+- The state of the item in this session: `kept` or `hidden`.
+- For a server: the number of tools, the tokens of their definitions, and the first tool names. If a connector is
+  not logged in, the row shows `not logged in`.
+- For a skill: the tokens of its entry and its description.
+
+Type in the filter field to find an item. Press Tab to go to a row, and press Enter to set or clear its mark. Press
+Esc to close the pane.
 
 To see the list as text, type `/loadout list`. Each line shows the mark and the state of the item in this session.
 
@@ -43,7 +53,7 @@ A name on the list can be one of these names:
 
 | Name | What the plugin keeps | Example |
 | --- | --- | --- |
-| A skill name | That skill | `retro:recall` |
+| A skill name, with or without its plugin | That skill | `retro:recall` or `recall` |
 | A plugin name | Each skill of that plugin | `retro` |
 | An MCP server name | The tool group and the instructions of that server | `claude-in-chrome` |
 

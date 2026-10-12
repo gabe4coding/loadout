@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, ToolInfo } from 'claude-code'
 
-import type { Choice, Offer } from '../types'
+import type { Choice, Offer, ServerFact, SkillFact } from '../types'
 import {
   flipKeep,
   groupsOf,
@@ -17,6 +17,10 @@ import {
   toolCatalog,
   toolGroup,
   removedServers,
+  serverDetail,
+  serverFacts,
+  skillDetail,
+  listedSkillFacts,
   trimMcpInstructions,
   unseenGroups,
 } from './scope'
@@ -33,6 +37,7 @@ const pinned = atom({ plugin: 'loadout', key: 'pinned' } as const, [])
 const marks = atom({ plugin: 'loadout', key: 'marks' } as const, null)
 const skillNames = atom({ plugin: 'loadout', key: 'skillNames' } as const, [])
 const filter = atom({ plugin: 'loadout', key: 'filter' } as const, '')
+const facts = atom({ plugin: 'loadout', key: 'facts' } as const, null)
 
 const PANE = 'loadout-keep'
 // The $.store key of the always-keep marks.
@@ -187,65 +192,148 @@ export const register: Register = (on, options) => {
       // The kind of a typed name is not known: a skill or a server.
       return { text: await setMark($, alwaysKeep, name, ['skills', 'tools'], word === 'keep') }
     }
-    if (word === 'list') return { text: listText(await items($), await keepNow($, alwaysKeep)) }
+    if (word === 'list') return { text: listText(await items($, null), await keepNow($, alwaysKeep)) }
     if (word === 'pick') {
+      const held = await readMarks($)
+      await Promise.all([update($, marks, () => held), update($, filter, () => '')])
       const { isPlaced } = await $.ui.open({ id: PANE, title: 'loadout: always keep', focus: true, closeOnEscape: true })
       return { text: isPlaced ? 'Opened the always-keep picker.' : 'No surface shows the picker here. Use "/loadout list" and "/loadout keep <name>".' }
     }
     return { text: await summary($) }
   })
 
-  // The always-keep picker: one row per tool group and skill. A press flips
-  // the mark and writes the option at once.
+  // Each opening of the picker reads the facts once, so a draw on each key of
+  // the filter reads nothing.
+  on('ui.open', { id: PANE }, async ($, e, next) => {
+    const known = await readFacts($)
+    await update($, facts, () => known)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // The always-keep picker: a section for the tool servers and one for the
+  // skills, one row each. A press flips the mark and saves it at once.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const ui = $.ui.resolve(e)
     const { Box, Text, Button } = ui
-    const [names, query, all] = await Promise.all([keepNow($, alwaysKeep), read($, filter), items($)])
+    const [names, query, held] = await Promise.all([keepNow($, alwaysKeep), read($, filter), read($, facts)])
+    // A draw may not write state: without facts from ui.open, each draw reads them.
+    const all = await items($, held ?? (await readFacts($)))
     const needle = query.trim().toLowerCase()
-    const shown = all.filter(item => item.group.toLowerCase().includes(needle))
+    const shown = all.filter(item => `${item.group} ${item.label}`.toLowerCase().includes(needle))
+    const isOn = (item: Item) => isAlwaysKept(item.group, item.kind, names)
+    const width = Math.min(34, Math.max(12, ...shown.map(item => item.label.length))) + 4
     const setFilter = (value: string) => void update($, filter, () => value)
+    // Only a server has a label other than its name.
+    const labels = new Map(all.filter(item => item.kind === 'tools').map(item => [item.group, item.label]))
+
+    const row = (item: Item) => {
+      const marked = isOn(item)
+      const flip = () => void setMark($, alwaysKeep, item.group, [item.kind], !marked).then(text => $.ui.toast(text))
+      return (
+        <Box key={`row:${item.kind}:${item.group}`} flexDirection="row">
+          <Box width={width} flexShrink={0}>
+            <Button key={`${item.kind}:${item.group}`} plain onPress={flip}>
+              <Text color={marked ? 'success' : 'inactive'}>{marked ? '● ' : '○ '}</Text>
+              {item.label.length > width - 2 ? `${item.label.slice(0, width - 3)}…` : item.label}
+            </Button>
+          </Box>
+          <Box width={8} flexShrink={0}>
+            <Text color={item.status === 'kept' ? 'success' : 'warning'}>{item.status}</Text>
+          </Box>
+          <Text dimColor wrap="truncate-end">{item.detail}</Text>
+        </Box>
+      )
+    }
+    const section = (kind: Kind) => {
+      const rows = shown.filter(item => item.kind === kind)
+      const total = all.filter(item => item.kind === kind).length
+      const empty = needle === '' ? 'None seen yet. The list fills after the first prompt.' : 'No match.'
+      return (
+        <Box key={`section:${kind}`} flexDirection="column" marginTop={1}>
+          <Text bold>
+            {SECTION[kind]} <Text dimColor>{rows.length === total ? `${total}` : `${rows.length} of ${total}`}</Text>
+          </Text>
+          {rows.length === 0 ? <Text dimColor>{`  ${empty}`}</Text> : rows.map(row)}
+        </Box>
+      )
+    }
     return (
       <Box flexDirection="column">
-        <Text dimColor>The plugin never hides a marked item. A change applies from the next session.</Text>
-        <Text>{keepLine(names)}</Text>
+        <Text dimColor>loadout never hides a marked item. A change applies from the next session.</Text>
+        <Text wrap="truncate-end">{keepLine(names.map(name => labels.get(normalize(name)) ?? name))}</Text>
         {'Input' in ui && (
-          <ui.Input key="filter" label="Filter: " placeholder="name" value={query} onInput={setFilter} onSubmit={setFilter} />
+          <Box marginTop={1}>
+            <ui.Input key="filter" label="Filter" placeholder="server or skill name" value={query} autoFocus onInput={setFilter} onSubmit={setFilter} />
+          </Box>
         )}
-        {shown.length === 0 && <Text dimColor>No items. The list fills after the first prompt.</Text>}
-        {shown.map(item => {
-          const isOn = isAlwaysKept(item.group, item.kind, names)
-          const flip = () => void setMark($, alwaysKeep, item.group, [item.kind], !isOn).then(text => $.ui.toast(text))
-          return (
-            <Button key={`${item.kind}:${item.group}`} plain onPress={flip}>
-              {isOn ? '[x] ' : '[ ] '}
-              {item.group}
-              <Text dimColor>{`  ${KIND_LABEL[item.kind]}${item.status === '' ? '' : `, ${item.status} now`}`}</Text>
-            </Button>
-          )
-        })}
+        {e.surface === 'terminal' && <Text dimColor>Tab moves · Enter marks · Esc closes</Text>}
+        {section('tools')}
+        {section('skills')}
       </Box>
     )
   })
 }
 
-const KIND_LABEL: Record<Kind, string> = { tools: 'tool group', skills: 'skill' }
+const SECTION: Record<Kind, string> = { tools: 'Tool servers', skills: 'Skills' }
 
 // One tool group or skill of the session, with its state in this session's
-// loadout: `kept`, `hidden`, or empty before the first decision.
-type Item = { kind: Kind; group: string; status: '' | 'kept' | 'hidden' }
+// loadout: `kept`, `hidden`, or empty before the first decision. `label` is
+// the name a person knows; `detail` its size and what it is.
+type Item = { kind: Kind; group: string; status: '' | 'kept' | 'hidden'; label: string; detail: string }
 
-// Every tool group and skill the session has seen: from the decisions, else
-// from the MCP tools and the skill listings that the plugin did not scope.
-async function items($: EngineInterface): Promise<Item[]> {
+type Facts = { servers: ServerFact[]; skills: SkillFact[] }
+
+// What the engine knows about each tool server and skill: the tools, the /mcp
+// name, the tokens and the descriptions.
+async function readFacts($: EngineInterface): Promise<Facts> {
+  const [listed, usage, commands] = await Promise.all([
+    $.tool.list().catch(() => []),
+    $.session.usage({ breakdown: 'summary' }).catch(() => null),
+    $.command.list().catch(() => []),
+  ])
+  const breakdown = usage?.context.breakdown
+  const about = new Map(commands.map(command => [command.name, command.description]))
+  return {
+    servers: serverFacts(listed, breakdown?.mcpTools ?? []),
+    skills: (breakdown?.skills?.skillFrontmatter ?? []).map(skill => {
+      // The breakdown can leave out the plugin of a plugin skill.
+      const name = skill.name.includes(':') || !skill.pluginName ? skill.name : `${skill.pluginName}:${skill.name}`
+      return { name, tokens: skill.tokens, about: about.get(name) ?? about.get(skill.name) ?? '' }
+    }),
+  }
+}
+
+const byName = new Intl.Collator(undefined, { sensitivity: 'base' })
+
+// Every tool server and skill the session has seen: from the decisions, the
+// skill listings that the plugin did not scope, and the facts when the pane
+// has them. Without facts, the MCP tools give the servers.
+async function items($: EngineInterface, known: Facts | null): Promise<Item[]> {
   const [t, s, names] = await Promise.all([readChoice($, 'tools'), readChoice($, 'skills'), read($, skillNames)])
-  const servers = t === null ? groupsOf(mcpTools(await $.tool.list().catch(() => [])), 'tools') : []
-  const list = (kind: Kind, choice: Choice | null, seen: string[]): Item[] =>
-    [...new Set([...seen, ...(choice?.kept ?? []), ...(choice?.hidden ?? [])])].sort().map(group => ({
-      kind,
-      group,
-      status: choice?.kept.includes(group) ? 'kept' : choice?.hidden.includes(group) ? 'hidden' : '',
-    }))
-  return [...list('tools', t, servers), ...list('skills', s, names)]
+  const servers = new Map((known?.servers ?? []).map(fact => [fact.group, fact]))
+  const listed = [...names, ...(s?.kept ?? []), ...(s?.hidden ?? [])]
+  const skillFacts = new Map(listedSkillFacts(known?.skills ?? [], listed).map(fact => [fact.name, fact]))
+  if (known === null && t === null) {
+    const listed = await $.tool.list().catch(() => [])
+    for (const group of groupsOf(mcpTools(listed), 'tools')) servers.set(group, { group, label: group, tools: [], tokens: 0 })
+  }
+  const status = (choice: Choice | null, group: string): Item['status'] =>
+    choice?.kept.includes(group) ? 'kept' : choice?.hidden.includes(group) ? 'hidden' : ''
+  const groups = (choice: Choice | null, seen: Iterable<string>) => [
+    ...new Set([...seen, ...(choice?.kept ?? []), ...(choice?.hidden ?? [])]),
+  ]
+  const tools = groups(t, servers.keys()).map((group): Item => {
+    const fact = servers.get(group)
+    const detail = fact === undefined || fact.tools.length === 0 ? '' : serverDetail(fact)
+    return { kind: 'tools', group, status: status(t, group), label: fact?.label ?? group, detail }
+  })
+  const skillItems = groups(s, [...names, ...skillFacts.keys()]).map((group): Item => {
+    const fact = skillFacts.get(group)
+    const detail = fact === undefined ? '' : skillDetail(fact.tokens, fact.about)
+    return { kind: 'skills', group, status: status(s, group), label: group, detail }
+  })
+  const sorted = (list: Item[]) => list.sort((a, b) => byName.compare(a.label, b.label))
+  return [...sorted(tools), ...sorted(skillItems)]
 }
 
 // The always-keep list for the next session: the option and the marks.
@@ -257,9 +345,13 @@ async function keepNow($: EngineInterface, option: string[]): Promise<string[]> 
 // store, so they last across sessions. The `marks` atom holds a copy, so a
 // write draws the pane again.
 async function readMarks($: EngineInterface): Promise<string[]> {
-  const held = await read($, marks)
-  if (held !== null) return held
-  const stored = await $.store.get(MARKS).catch(() => undefined)
+  return (await read($, marks)) ?? (await storedMarks($)) ?? []
+}
+
+// The marks in $.store, or null when the store cannot be read.
+async function storedMarks($: EngineInterface): Promise<string[] | null> {
+  const stored = await $.store.get(MARKS).catch(() => null)
+  if (stored === null) return null
   return Array.isArray(stored) ? stored.filter((name): name is string => typeof name === 'string') : []
 }
 
@@ -288,7 +380,8 @@ function listText(all: Item[], names: string[]): string {
 async function setMark($: EngineInterface, option: string[], name: string, kinds: readonly Kind[], isOn: boolean): Promise<string> {
   const as = (kind: Kind) => (kind === 'tools' ? normalize(name) : name)
   const isCovered = (names: string[]) => kinds.some(kind => isAlwaysKept(as(kind), kind, names))
-  const before = await readMarks($)
+  // The store first: another session can have saved marks since this one read them.
+  const before = (await storedMarks($)) ?? (await readMarks($))
   if (isOn && isCovered([...option, ...before])) return `${name} is already on the always-keep list.`
   const after = isOn ? [...before, name] : kinds.reduce((names, kind) => flipKeep(names, as(kind), kind, false), before)
   if (isCovered(option)) return `${name} stays on the always-keep list: the option alwaysKeep in your settings covers it. Remove it there.`

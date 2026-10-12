@@ -6,6 +6,13 @@ export type Choice = { kept: string[]; hidden: string[]; always: string[] }
 // matched against.
 export type Offer = { kind: 'tools' | 'skills'; group: string; row: string }
 
+// One MCP server as the picker shows it. `group` is the normalized server
+// name; `label` the name a person knows; `tools` the short tool names.
+export type ServerFact = { group: string; label: string; tools: string[]; tokens: number }
+
+// One skill as the picker shows it, with its description.
+export type SkillFact = { name: string; tokens: number; about: string }
+
 declare module 'claude-code' {
   interface PluginState {
     'loadout': {
@@ -26,6 +33,9 @@ declare module 'claude-code' {
       skillNames: string[]
       // The text of the pane's filter field.
       filter: string
+      // What the engine knows about the servers and skills, read when the pane
+      // opens, so typing in the filter reads nothing again.
+      facts: { servers: ServerFact[]; skills: SkillFact[] } | null
     }
   }
 }

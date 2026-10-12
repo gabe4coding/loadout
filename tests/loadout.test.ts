@@ -335,7 +335,7 @@ test('the picker lists the skills and flips a mark on a press', async ($, on) =>
     expect(JSON.stringify(await ui.drawn())).toContain('update-config')
     await ui.input({ key: 'filter', text: 'riff', kind: 'change' })
     const drawn = JSON.stringify(await ui.drawn())
-    expect(drawn).toContain('[x] ')
+    expect(drawn).toContain('● ')
     expect(drawn).not.toContain('update-config')
     await ui.unmount()
   }
@@ -347,4 +347,75 @@ test('the picker lists the skills and flips a mark on a press', async ($, on) =>
   await ui.press({ key: 'skills:riff:title' })
   expect(store.alwaysKeep).toEqual(['update-config'])
   expect(JSON.stringify(await ui.drawn())).toContain('Always keep: update-config')
+})
+
+test('the picker names each server as /mcp does, with its size, and each skill with its description', async ($, on) => {
+  quiet(on)
+  listed(on)
+  fakeStore(on)
+  // The engine names a claude.ai connector in the tool-name spelling.
+  const tool = (name: string, tokens: number) => ({ name, serverName: 'claude_ai_Datadog', tokens, isLoaded: false })
+  on('session.usage', () => ({
+    value: {
+      startedAt: 0,
+      rateLimits: [],
+      context: {
+        window: 200_000,
+        breakdown: {
+          mcpTools: [tool('mcp__datadog__search_logs', 900), tool('mcp__datadog__get_trace', 600)],
+          skills: { totalSkills: 1, includedSkills: 1, tokens: 40, skillFrontmatter: [{ name: 'update-config', source: 'built-in', tokens: 40 }] },
+        },
+      },
+    },
+  }) as never)
+  on('command.list', () => ({ value: [{ name: 'update-config', description: 'Configure the harness', source: 'builtin' }] }) as never)
+
+  const ui = await $.ui.mount(pane('terminal'))
+  await ui.input({ key: 'filter', text: '', kind: 'change' })
+  const drawn = JSON.stringify(await ui.drawn())
+  expect(drawn).toContain('claude.ai Datadog')
+  expect(drawn).toContain('2 tools · 1.5k tokens · search_logs, get_trace')
+  expect(drawn).toContain('1 tool · send_message')
+  expect(drawn).toContain('40 tokens · Configure the harness')
+  expect(drawn).toContain('Tool servers')
+})
+
+test('the picker says when a connector is not logged in', async ($, on) => {
+  quiet(on)
+  fakeStore(on)
+  listed(on, [
+    { name: 'mcp__claude_ai_Figma__authenticate', description: '', mcp: true },
+    { name: 'mcp__claude_ai_Figma__complete_authentication', description: '', mcp: true },
+  ])
+  const ui = await $.ui.mount(pane('terminal'))
+  await ui.input({ key: 'filter', text: '', kind: 'change' })
+  expect(JSON.stringify(await ui.drawn())).toContain('2 tools · not logged in')
+})
+
+test('the picker reads the facts once when it opens, not on each key of the filter', async ($, on) => {
+  quiet(on)
+  listed(on)
+  fakeStore(on)
+  let reads = 0
+  on('session.usage', () => {
+    reads++
+    return { value: { startedAt: 0, rateLimits: [], context: { window: 200_000 } } } as never
+  })
+  on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+  await $.command.run(run('pick'))
+  const ui = await $.ui.mount(pane('terminal'))
+  for (const text of ['d', 'da', 'dat']) await ui.input({ key: 'filter', text, kind: 'change' })
+  expect(JSON.stringify(await ui.drawn())).toContain('datadog')
+  expect(reads).toBe(1)
+})
+
+test('a mark keeps the marks that another session saved after the picker opened', async ($, on) => {
+  quiet(on)
+  listed(on)
+  const store = fakeStore(on, { alwaysKeep: ['riff'] })
+  on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+  await $.command.run(run('pick'))
+  store.alwaysKeep = ['riff', 'slack']
+  await $.command.run(run('keep datadog'))
+  expect(store.alwaysKeep).toEqual(['riff', 'slack', 'datadog'])
 })

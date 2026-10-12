@@ -1,6 +1,8 @@
 // Pure text work: parse the listings the engine injects, group their entries,
 // and rebuild them with only the groups the classifier kept.
 
+import type { ServerFact, SkillFact } from '../types'
+
 // A deferred tool line is one bare name; an MCP tool is mcp__<server>__<tool>.
 const TOOL_LINE = /^[A-Za-z0-9_.:-]+$/
 const SKILL_LINE = /^- ([^\s:]+(?::[^\s:]+)?)(?::\s|$)/
@@ -8,8 +10,14 @@ const SKILL_LINE = /^- ([^\s:]+(?::[^\s:]+)?)(?::\s|$)/
 export const CORE = 'core'
 
 export function toolGroup(name: string): string {
-  const match = /^mcp__(.+?)__/.exec(name)
-  return match?.[1] ? normalize(match[1]) : CORE
+  const parts = splitMcpName(name)
+  return parts === null ? CORE : normalize(parts.server)
+}
+
+// The server and tool parts of `mcp__<server>__<tool>`, or null for another tool.
+export function splitMcpName(name: string): { server: string; tool: string } | null {
+  const match = /^mcp__(.+?)__(.*)$/.exec(name)
+  return match?.[1] === undefined || match[2] === undefined ? null : { server: match[1], tool: match[2] }
 }
 
 export function normalize(server: string): string {
@@ -63,7 +71,7 @@ export function toolCatalog(listing: Listing): Row[] {
   const byGroup = new Map<string, string[]>()
   for (const entry of listing.entries) {
     if (entry.group === CORE) continue
-    const short = entry.name.replace(/^mcp__.+?__/, '')
+    const short = splitMcpName(entry.name)?.tool ?? entry.name
     byGroup.set(entry.group, [...(byGroup.get(entry.group) ?? []), short])
   }
   return [...byGroup].map(([group, tools]) => ({
@@ -90,6 +98,73 @@ export function mcpTools(listed: readonly { name: string; mcp: boolean }[]): Lis
   return parseTools(listed.filter(info => info.mcp).map(info => info.name).join('\n'))
 }
 
+// A server name as a person reads it: a claude.ai connector in the tool-name
+// spelling (`claude_ai_Google_Drive`) as the connector list shows it.
+export function serverLabel(name: string): string {
+  const match = /^claude[._]ai[_ ](.+)$/i.exec(name)
+  return match?.[1] ? `claude.ai ${match[1].replace(/_/g, ' ')}` : name
+}
+
+// One fact per MCP server of the session: its tools from $.tool.list(), and
+// the tokens and the /mcp name from the context breakdown.
+export function serverFacts(
+  listed: readonly { name: string; mcp: boolean }[],
+  counted: readonly { name: string; serverName: string; tokens: number }[],
+): ServerFact[] {
+  const byGroup = new Map<string, ServerFact>()
+  for (const info of listed) {
+    const parts = info.mcp ? splitMcpName(info.name) : null
+    if (parts === null) continue
+    const group = normalize(parts.server)
+    const fact = byGroup.get(group) ?? { group, label: serverLabel(parts.server), tools: [], tokens: 0 }
+    fact.tools.push(parts.tool)
+    byGroup.set(group, fact)
+  }
+  for (const tool of counted) {
+    const fact = byGroup.get(toolGroup(tool.name))
+    if (fact === undefined) continue
+    fact.tokens += tool.tokens
+    if (tool.serverName !== '') fact.label = serverLabel(tool.serverName)
+  }
+  return [...byGroup.values()]
+}
+
+// A connector that is not logged in has only its two login tools.
+export function isLoginOnly(tools: readonly string[]): boolean {
+  return tools.length === 2 && tools.includes('authenticate') && tools.includes('complete_authentication')
+}
+
+// "1.2k tokens", or nothing when the engine gave no count.
+export function tokenCount(tokens: number): string {
+  if (tokens <= 0) return ''
+  return `${tokens < 1000 ? tokens : `${(tokens / 1000).toFixed(1)}k`} tokens`
+}
+
+// A server's line in the picker: its size, then its first tools or its login state.
+export function serverDetail(fact: ServerFact): string {
+  const count = `${fact.tools.length} tool${fact.tools.length === 1 ? '' : 's'}`
+  const first = `${fact.tools.slice(0, 3).join(', ')}${fact.tools.length > 3 ? ', …' : ''}`
+  return [count, tokenCount(fact.tokens), isLoginOnly(fact.tools) ? 'not logged in' : first].filter(Boolean).join(' · ')
+}
+
+// A skill's line in the picker: its tokens, then its description.
+export function skillDetail(tokens: number, about: string): string {
+  return [tokenCount(tokens), about].filter(Boolean).join(' · ')
+}
+
+// The skill facts under the names of the skill listing. The context
+// breakdown can name a plugin skill without its plugin (`docx` for
+// `anthropic-skills:docx`): such a fact takes the one listed name that ends
+// with it, so the picker has one row and a mark covers the listed skill.
+export function listedSkillFacts(facts: readonly SkillFact[], listed: readonly string[]): SkillFact[] {
+  const names = new Set(listed)
+  return facts.map(fact => {
+    if (names.has(fact.name) || fact.name.includes(':')) return fact
+    const matches = listed.filter(name => name.endsWith(`:${fact.name}`))
+    return matches.length === 1 && matches[0] !== undefined ? { ...fact, name: matches[0] } : fact
+  })
+}
+
 // The groups of `listing` that no decision covers yet.
 export function unseenGroups(
   listing: Listing,
@@ -107,10 +182,13 @@ export function parseKeep(text: string): string[] {
 
 // Whether a name of the alwaysKeep option covers a group. A tool group matches
 // its server name in any spelling (`claude-in-chrome`). A skill matches its full
-// name, or its plugin name alone (`retro` covers `retro:recall`).
+// name, its plugin name alone (`retro` covers `retro:recall`), or its own name
+// without the plugin (`recall` covers `retro:recall`): the context breakdown
+// and people often leave the plugin out. A name that covers too much keeps
+// more, which costs less than a wrong cut.
 export function isAlwaysKept(group: string, kind: 'tools' | 'skills', names: readonly string[]): boolean {
   if (kind === 'tools') return names.some(name => normalize(name) === group)
-  return names.some(name => group === name || group.startsWith(`${name}:`))
+  return names.some(name => group === name || group.startsWith(`${name}:`) || (!name.includes(':') && group.endsWith(`:${name}`)))
 }
 
 // The alwaysKeep names after a mark on a group is set or cleared. Clearing
