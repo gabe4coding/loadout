@@ -7,7 +7,8 @@ description: Common problems with loadout and the known limits.
 
 ## The plugin does not load
 
-If `/loadout` is not in the command list, do these steps:
+The command is also listed as `/loadout:loadout`, and both names do the same. Before version 0.6.1, the command was
+not in the list of a new session until you ran `/reload-plugins`. If `/loadout` is not in the command list, do these steps:
 
 1. Run `claude plugin list` in a shell. Find `loadout@loadout` and check that its status is
    `enabled`.

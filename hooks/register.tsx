@@ -160,9 +160,11 @@ export const register: Register = (on, options) => {
   const defaults: Switches = { effort: options.effortPerPrompt === true, model: options.modelForSession === true }
 
   on('session.start', async ($, e, next) => {
-    // A new session (also after /clear) starts with no effort history.
+    // A new session starts with no effort history. /clear does not fire this event.
     picking = null
     last = null
+    // The typeahead is built before this hook runs, so commands/loadout.md lists
+    // /loadout from the first keystroke; this call adds the bare name.
     await $.command.register({
       name: 'loadout',
       description: 'Show the loadout of this session. Also: list, pick, keep <name>, unkeep <name>, off, on, effort on|off, model on|off',
@@ -280,7 +282,7 @@ export const register: Register = (on, options) => {
     return { text }
   })
 
-  on('command.run', { command: 'loadout' }, async ($, e) => {
+  on('command.run', { command: /^(loadout:)?loadout$/ }, async ($, e) => {
     const [word = '', ...rest] = e.args.trim().split(/\s+/)
     if (word === 'off' || word === 'on') {
       await update($, isOff, () => word === 'off')
