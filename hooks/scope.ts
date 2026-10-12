@@ -85,6 +85,26 @@ export function groupsOf(listing: Listing, kind: 'tools' | 'skills'): string[] {
   return [...groups]
 }
 
+// Reads the alwaysKeep option: names split on commas or white space, once each.
+export function parseKeep(text: string): string[] {
+  return [...new Set(text.split(/[\s,]+/).filter(name => name !== ''))]
+}
+
+// Whether a name of the alwaysKeep option covers a group. A tool group matches
+// its server name in any spelling (`claude-in-chrome`). A skill matches its full
+// name, or its plugin name alone (`retro` covers `retro:recall`).
+export function isAlwaysKept(group: string, kind: 'tools' | 'skills', names: readonly string[]): boolean {
+  if (kind === 'tools') return names.some(name => normalize(name) === group)
+  return names.some(name => group === name || group.startsWith(`${name}:`))
+}
+
+// The alwaysKeep names after a mark on a group is set or cleared. Clearing
+// removes each name that covers the group, so the group is not kept after.
+export function flipKeep(names: readonly string[], group: string, kind: 'tools' | 'skills', isOn: boolean): string[] {
+  if (!isOn) return names.filter(name => !isAlwaysKept(group, kind, [name]))
+  return isAlwaysKept(group, kind, names) ? [...names] : [...names, group]
+}
+
 // Reads the classifier's reply: one group id per line, anything else ignored.
 export function parseKept(reply: string, groups: readonly string[]): string[] {
   const known = new Set(groups)

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { parseKept, parseSkills, parseTools, rebuild, trimMcpInstructions } from '../hooks/scope'
+import { flipKeep, isAlwaysKept, parseKeep, parseKept, parseSkills, parseTools, rebuild, trimMcpInstructions } from '../hooks/scope'
 
 test('reads only known ids from a loose classifier reply', () => {
   const kept = parseKept('- `datadog`\n"slack", unknown\n\n  github  ', ['datadog', 'slack', 'github'])
@@ -30,4 +30,24 @@ test('keeps the MCP instructions of a server it does not know', () => {
 test('trims MCP instructions that come as blocks with no header', () => {
   const out = trimMcpInstructions('## datadog\nA\n\n## other\nB', new Set(['datadog']))
   expect(out).toBe('## other\nB')
+})
+
+test('reads the alwaysKeep option with commas or spaces, each name once', () => {
+  expect(parseKeep(' retro, kb-search  how-i-work,,retro\n')).toEqual(['retro', 'kb-search', 'how-i-work'])
+  expect(parseKeep('')).toEqual([])
+})
+
+test('an always-keep name covers a server in any spelling, a skill or all skills of a plugin', () => {
+  expect(isAlwaysKept('claude_in_chrome', 'tools', ['claude-in-chrome'])).toBe(true)
+  expect(isAlwaysKept('retro:recall', 'skills', ['retro'])).toBe(true)
+  expect(isAlwaysKept('retro:recall', 'skills', ['retro:recall'])).toBe(true)
+  expect(isAlwaysKept('retroactive', 'skills', ['retro'])).toBe(false)
+  expect(isAlwaysKept('slack', 'tools', ['retro'])).toBe(false)
+})
+
+test('setting a mark adds the group once, clearing it removes each name that covers it', () => {
+  expect(flipKeep(['retro'], 'kb-search', 'skills', true)).toEqual(['retro', 'kb-search'])
+  expect(flipKeep(['retro'], 'retro:recall', 'skills', true)).toEqual(['retro'])
+  expect(flipKeep(['retro', 'kb-search'], 'retro:recall', 'skills', false)).toEqual(['kb-search'])
+  expect(flipKeep(['Claude-In-Chrome'], 'claude_in_chrome', 'tools', false)).toEqual([])
 })

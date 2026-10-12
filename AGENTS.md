@@ -6,7 +6,7 @@ gets a note when it needs a hidden item. The whole repo is the plugin (marketpla
 
 ## Read first, by task
 - Any change to code, tests, model-facing text or docs → `CODING_STANDARDS.md`.
-- Hooks, Haiku calls, `/loadout`, session state → `hooks/register.ts`. Parse and rebuild of listings (pure, no `$`)
+- Hooks, Haiku calls, `/loadout`, session state → `hooks/register.tsx`. Parse and rebuild of listings (pure, no `$`)
   → `hooks/scope.ts`. State contract → `types/index.d.ts`.
 - Behaviour end to end → `docs/how-it-works.mdx`. Known limits → `docs/troubleshooting.mdx`.
 - What real Claude Code does (event order, origins) → `tests/smoke.e2e.mjs` and its trace. Run it before you trust

@@ -3,7 +3,11 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Choice, Offer } from '../types'
 import {
+  flipKeep,
   groupsOf,
+  isAlwaysKept,
+  normalize,
+  parseKeep,
   parseKept,
   parseSkills,
   parseTools,
@@ -23,6 +27,14 @@ const skills = atom({ plugin: 'loadout', key: 'skills' } as const, null)
 const isOff = atom({ plugin: 'loadout', key: 'isOff' } as const, false)
 const offers = atom({ plugin: 'loadout', key: 'offers' } as const, [])
 const surfaced = atom({ plugin: 'loadout', key: 'surfaced' } as const, [])
+const pinned = atom({ plugin: 'loadout', key: 'pinned' } as const, [])
+const marks = atom({ plugin: 'loadout', key: 'marks' } as const, null)
+const skillNames = atom({ plugin: 'loadout', key: 'skillNames' } as const, [])
+const filter = atom({ plugin: 'loadout', key: 'filter' } as const, '')
+
+const PANE = 'loadout-keep'
+// The $.store key of the always-keep marks.
+const MARKS = 'alwaysKeep'
 
 type Kind = 'tools' | 'skills'
 
@@ -70,11 +82,12 @@ function trace($: EngineInterface, file: string, line: Record<string, unknown>):
 
 export const register: Register = (on, options) => {
   const file = typeof options.traceFile === 'string' ? options.traceFile : ''
+  const alwaysKeep = typeof options.alwaysKeep === 'string' ? parseKeep(options.alwaysKeep) : []
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'loadout',
-      description: 'Show the loadout of this session; "/loadout off" or "/loadout on" to switch it',
+      description: 'Show the loadout of this session. Also: list, pick, keep <name>, unkeep <name>, off, on',
     })
     return next(e)
   })
@@ -86,6 +99,10 @@ export const register: Register = (on, options) => {
     const text = e.text.trim()
     if (text === '') return next(e)
     if ((await read($, prompt)) === null) {
+      // The session keeps the names of this moment: a server that connects
+      // later gets the same names, and a change applies from the next session.
+      const names = await keepNow($, alwaysKeep)
+      await update($, pinned, () => names)
       await update($, prompt, () => text.slice(0, 4000))
       return next(e)
     }
@@ -106,20 +123,22 @@ export const register: Register = (on, options) => {
     const choice = await choose($, 'tools', listing)
     $.ui.invalidate('prompt.section')
     const out = rebuild(listing, choice.kept, 'tools')
-    trace($, file, { event: 'listing', type: e.type, isScoped: true, kept: choice.kept, hidden: out.hidden })
+    trace($, file, { event: 'listing', type: e.type, isScoped: true, kept: choice.kept, alwaysKept: choice.always, hidden: out.hidden })
     return { text: out.text }
   })
 
   on('prompt.attachment', { type: 'skill_listing' }, async ($, e, next) => {
     const base = await next(e)
-    if (base.text === null || (await isSkipped($))) {
+    if (base.text === null) return base
+    const listing = parseSkills(base.text)
+    if (await isSkipped($)) {
+      await update($, skillNames, names => [...new Set([...names, ...groupsOf(listing, 'skills')])])
       trace($, file, { event: 'listing', type: e.type, isScoped: false })
       return base
     }
-    const listing = parseSkills(base.text)
     const choice = await choose($, 'skills', listing)
     const out = rebuild(listing, choice.kept, 'skills')
-    trace($, file, { event: 'listing', type: e.type, isScoped: true, kept: choice.kept, hidden: out.hidden })
+    trace($, file, { event: 'listing', type: e.type, isScoped: true, kept: choice.kept, alwaysKept: choice.always, hidden: out.hidden })
     return { text: out.text }
   })
 
@@ -148,15 +167,132 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'loadout' }, async ($, e) => {
-    const word = e.args.trim()
+    const [word = '', ...rest] = e.args.trim().split(/\s+/)
     if (word === 'off' || word === 'on') {
       await update($, isOff, () => word === 'off')
       $.ui.invalidate('prompt.attachment')
       $.ui.invalidate('prompt.section')
       return { text: `loadout is ${word} for this session. The next request uses it.` }
     }
+    if (word === 'keep' || word === 'unkeep') {
+      const [name] = rest
+      if (name === undefined || rest.length > 1 || name.includes(',')) {
+        return { text: `Type "/loadout ${word} <name>" with one skill, plugin or server name.` }
+      }
+      // The kind of a typed name is not known: a skill or a server.
+      return { text: await setMark($, alwaysKeep, name, ['skills', 'tools'], word === 'keep') }
+    }
+    if (word === 'list') return { text: listText(await items($), await keepNow($, alwaysKeep)) }
+    if (word === 'pick') {
+      const { isPlaced } = await $.ui.open({ id: PANE, title: 'loadout: always keep', focus: true, closeOnEscape: true })
+      return { text: isPlaced ? 'Opened the always-keep picker.' : 'No surface shows the picker here. Use "/loadout list" and "/loadout keep <name>".' }
+    }
     return { text: await summary($) }
   })
+
+  // The always-keep picker: one row per tool group and skill. A press flips
+  // the mark and writes the option at once.
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const ui = $.ui.resolve(e)
+    const { Box, Text, Button } = ui
+    const [names, query, all] = await Promise.all([keepNow($, alwaysKeep), read($, filter), items($)])
+    const needle = query.trim().toLowerCase()
+    const shown = all.filter(item => item.group.toLowerCase().includes(needle))
+    const setFilter = (value: string) => void update($, filter, () => value)
+    return (
+      <Box flexDirection="column">
+        <Text dimColor>The plugin never hides a marked item. A change applies from the next session.</Text>
+        <Text>{keepLine(names)}</Text>
+        {'Input' in ui && (
+          <ui.Input key="filter" label="Filter: " placeholder="name" value={query} onInput={setFilter} onSubmit={setFilter} />
+        )}
+        {shown.length === 0 && <Text dimColor>No items. The list fills after the first prompt.</Text>}
+        {shown.map(item => {
+          const isOn = isAlwaysKept(item.group, item.kind, names)
+          const flip = () => void setMark($, alwaysKeep, item.group, [item.kind], !isOn).then(text => $.ui.toast(text))
+          return (
+            <Button key={`${item.kind}:${item.group}`} plain onPress={flip}>
+              {isOn ? '[x] ' : '[ ] '}
+              {item.group}
+              <Text dimColor>{`  ${KIND_LABEL[item.kind]}${item.status === '' ? '' : `, ${item.status} now`}`}</Text>
+            </Button>
+          )
+        })}
+      </Box>
+    )
+  })
+}
+
+const KIND_LABEL: Record<Kind, string> = { tools: 'tool group', skills: 'skill' }
+
+// One tool group or skill of the session, with its state in this session's
+// loadout: `kept`, `hidden`, or empty before the first decision.
+type Item = { kind: Kind; group: string; status: '' | 'kept' | 'hidden' }
+
+// Every tool group and skill the session has seen: from the decisions, else
+// from the MCP tools and the skill listings that the plugin did not scope.
+async function items($: EngineInterface): Promise<Item[]> {
+  const [t, s, names] = await Promise.all([readChoice($, 'tools'), readChoice($, 'skills'), read($, skillNames)])
+  const servers = t === null ? groupsOf(await mcpTools($).catch(() => parseTools('')), 'tools') : []
+  const list = (kind: Kind, choice: Choice | null, seen: string[]): Item[] =>
+    [...new Set([...seen, ...(choice?.kept ?? []), ...(choice?.hidden ?? [])])].sort().map(group => ({
+      kind,
+      group,
+      status: choice?.kept.includes(group) ? 'kept' : choice?.hidden.includes(group) ? 'hidden' : '',
+    }))
+  return [...list('tools', t, servers), ...list('skills', s, names)]
+}
+
+// The always-keep list for the next session: the option and the marks.
+async function keepNow($: EngineInterface, option: string[]): Promise<string[]> {
+  return [...new Set([...option, ...(await readMarks($))])]
+}
+
+// The names that /loadout keep and the pane saved. They live in the plugin's
+// store, so they last across sessions. The `marks` atom holds a copy, so a
+// write draws the pane again.
+async function readMarks($: EngineInterface): Promise<string[]> {
+  const held = await read($, marks)
+  if (held !== null) return held
+  const stored = await $.store.get(MARKS).catch(() => undefined)
+  return Array.isArray(stored) ? stored.filter((name): name is string => typeof name === 'string') : []
+}
+
+function keepLine(names: readonly string[]): string {
+  return `Always keep: ${names.join(', ') || 'none'}`
+}
+
+function listText(all: Item[], names: string[]): string {
+  const row = (item: Item) =>
+    `${isAlwaysKept(item.group, item.kind, names) ? '[x]' : '[ ]'} ${item.group}${item.status === '' ? '' : `  (${item.status})`}`
+  const part = (kind: Kind, title: string) => {
+    const rows = all.filter(item => item.kind === kind).map(row)
+    return [`${title}:`, ...(rows.length === 0 ? ['none seen yet'] : rows)]
+  }
+  return [
+    keepLine(names),
+    '[x] marks an item that the plugin never hides. (kept) and (hidden) give its state in this session.',
+    ...part('tools', 'Tool groups'),
+    ...part('skills', 'Skills'),
+    'Change a mark with "/loadout keep <name>" or "/loadout unkeep <name>", or with the picker: "/loadout pick".',
+  ].join('\n')
+}
+
+// Sets or clears the mark of a name and saves the marks. A name that the
+// option covers stays: the plugin does not write the settings.
+async function setMark($: EngineInterface, option: string[], name: string, kinds: readonly Kind[], isOn: boolean): Promise<string> {
+  const as = (kind: Kind) => (kind === 'tools' ? normalize(name) : name)
+  const isCovered = (names: string[]) => kinds.some(kind => isAlwaysKept(as(kind), kind, names))
+  const before = await readMarks($)
+  if (isOn && isCovered([...option, ...before])) return `${name} is already on the always-keep list.`
+  const after = isOn ? [...before, name] : kinds.reduce((names, kind) => flipKeep(names, as(kind), kind, false), before)
+  if (isCovered(option)) return `${name} stays on the always-keep list: the option alwaysKeep in your settings covers it. Remove it there.`
+  if (after.length === before.length) return `${name} is not on the always-keep list.`
+  await update($, marks, () => after)
+  const isSaved = await $.store.set(MARKS, after).then(() => true, () => false)
+  if (!isSaved) return 'loadout could not save the always-keep list. It holds for this session only.'
+  const when = (await read($, prompt)) === null ? 'This session uses it from the first prompt.' : 'It applies from the next session.'
+  return `${keepLine([...new Set([...option, ...after])])}. ${when}`
 }
 
 function isPerson(kind: string): boolean {
@@ -223,16 +359,21 @@ async function mcpTools($: EngineInterface): Promise<Listing> {
 // Classifies only the groups not seen before, so a later delta (an MCP server
 // that connected late) gets a decision of its own and earlier ones stay.
 async function decide($: EngineInterface, kind: Kind, listing: Listing): Promise<Choice> {
-  const before: Choice = (await readChoice($, kind)) ?? { kept: [], hidden: [] }
+  const before: Choice = (await readChoice($, kind)) ?? { kept: [], hidden: [], always: [] }
   const seen = new Set([...before.kept, ...before.hidden])
   const unseen = groupsOf(listing, kind).filter(group => !seen.has(group))
   if (unseen.length === 0) return before
 
+  // The always-kept groups skip the classifier: it cannot hide them.
+  const names = await read($, pinned)
+  const always = unseen.filter(group => isAlwaysKept(group, kind, names))
+  const open = unseen.filter(group => !always.includes(group))
   const catalog = (kind === 'tools' ? toolCatalog(listing) : skillCatalog(listing)).filter(row =>
-    unseen.includes(row.group),
+    open.includes(row.group),
   )
   const rows = catalog.map(row => row.row)
-  const kept = await classify($, kind, (await read($, prompt)) ?? '', rows, unseen)
+  const picked = open.length === 0 ? [] : await classify($, kind, (await read($, prompt)) ?? '', rows, open)
+  const kept = [...always, ...picked]
   const dropped = catalog
     .filter(row => !kept.includes(row.group))
     .map(row => ({ kind, group: row.group, row: row.row }))
@@ -242,6 +383,7 @@ async function decide($: EngineInterface, kind: Kind, listing: Listing): Promise
   const choice: Choice = {
     kept: [...new Set([...before.kept, ...kept])],
     hidden: [...new Set([...before.hidden, ...unseen.filter(group => !kept.includes(group))])],
+    always: [...new Set([...before.always, ...always])],
   }
   await writeChoice($, kind, choice)
   const [t, s] = [await read($, tools), await read($, skills)]
@@ -287,6 +429,7 @@ async function summary($: EngineInterface): Promise<string> {
   const [t, s] = [await read($, tools), await read($, skills)]
   if (t === null && s === null) return 'loadout has not picked a loadout for this session yet. Send a prompt first.'
   return [
+    `Always kept: ${[...(t?.always ?? []), ...(s?.always ?? [])].join(', ') || 'none'}`,
     `Tool groups kept: ${t?.kept.join(', ') || 'none'}`,
     `Tool groups hidden: ${t?.hidden.join(', ') || 'none'}`,
     `Skills kept: ${s?.kept.join(', ') || 'none'}`,

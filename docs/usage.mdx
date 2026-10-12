@@ -1,6 +1,6 @@
 ---
 title: Usage
-description: How the first prompt sets the loadout, what /loadout shows, and what happens on later prompts.
+description: How the first prompt sets the loadout, how to always keep an item, what /loadout shows, and what happens on later prompts.
 ---
 
 # Usage
@@ -19,12 +19,60 @@ items.
 
 The classifier keeps generously. It keeps each item that can help with the task or its next steps.
 
+## Always keep an item
+
+Some skills help with each task, for example a memory skill or a search skill for past sessions. A narrow first
+prompt can hide them. A hidden skill still works, but Claude does not see its description, so Claude does not think
+to use it. Put these items on the always-keep list. The plugin never hides an item on this list.
+
+To add an item, type its name:
+
+```
+/loadout keep kb-search
+```
+
+To remove an item, type `/loadout unkeep kb-search`. If a plugin name on the list covers the item, the plugin
+name goes off the list too.
+
+To mark items in a list, type `/loadout pick`. A pane opens with each tool group and skill of the session. Type in
+the filter field to find an item. Press an item to set or clear its mark `[x]`.
+
+To see the list as text, type `/loadout list`. Each line shows the mark and the state of the item in this session.
+
+A name on the list can be one of these names:
+
+| Name | What the plugin keeps | Example |
+| --- | --- | --- |
+| A skill name | That skill | `retro:recall` |
+| A plugin name | Each skill of that plugin | `retro` |
+| An MCP server name | The tool group and the instructions of that server | `claude-in-chrome` |
+
+The plugin keeps the names from `/loadout keep` and the pane in its own storage in Claude Code. These names stay
+for all sessions.
+
+You can also put names in the plugin option `alwaysKeep`, separated by commas. The plugin adds them to the list. Set
+the option in `/config`, or in `~/.claude/settings.json`:
+
+```json
+{
+  "pluginConfigs": {
+    "loadout": { "options": { "alwaysKeep": "kb-search, retro" } }
+  }
+}
+```
+
+`/loadout unkeep` and the pane do not change the option. To remove a name of the option, edit your settings.
+
+A change to the list applies from the next session. The session that is open keeps its listings, so the prompt
+cache stays valid. If you change the list before the first prompt, the session uses the new list.
+
 ## See the loadout
 
 Type `/loadout`. The command shows these lines:
 
 | Line | Meaning |
 | --- | --- |
+| Always kept | The items that the plugin kept because of the always-keep list |
 | Tool groups kept | The servers whose tools stay in the tool listing |
 | Tool groups hidden | The servers whose tools the plugin hid |
 | Skills kept | The skills that stay in the skill listing |

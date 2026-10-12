@@ -5,7 +5,7 @@ enforces; the others rely on discipline.
 
 ## Code
 - `hooks/` is the hooks module that Claude Code loads (`hooks/hooks.json`). Pure helpers go in `hooks/scope.ts`,
-  with no `$`, so tests call them directly. Anything that uses `$` goes in `hooks/register.ts`, in a function
+  with no `$`, so tests call them directly. Anything that uses `$` goes in `hooks/register.tsx`, in a function
   declared at the top of the file: the engine's loader follows `$` only there, never across an import, and a module
   that passes `$` to another file does not load. `[test: claude plugin validate .]`
 - Spell each state atom at its `read` or `update` call (`read($, tools)`), never through a variable that holds one of
@@ -49,7 +49,7 @@ enforces; the others rely on discipline.
 
 ## Model-facing text
 The text a model reads is part of the product: the notes that `rebuild` adds to a listing (`note` in
-`hooks/scope.ts`), the notes for later prompts (`recallNotes` in `hooks/register.ts`), and the Haiku prompts
+`hooks/scope.ts`), the notes for later prompts (`recallNotes` in `hooks/register.tsx`), and the Haiku prompts
 `SYSTEM` and `RECALL`.
 - Every sentence must change what the model does. Remove facts the model cannot act on.
 - Each listing note says that the hidden items still work and names the way to reach them (ToolSearch,
