@@ -55,8 +55,13 @@ Add this entry to `~/.claude/settings.json`:
 | `mcp_instructions` | The plugin gets the MCP server instructions | `where`, `removed` |
 | `recall` | The plugin checks a later prompt | `named` |
 
-If `isScoped` is `false`, the plugin did not have the first prompt yet. It then kept the full listing. The trace
-contains names and counts only, not the text of your prompts.
+If `isScoped` is `false`, the plugin kept the full listing. These are the causes:
+
+- The plugin did not have the first prompt yet.
+- The loadout is off for the session.
+- The session has no ToolSearch. This applies to a tool listing only.
+
+The trace contains names and counts only, not the text of your prompts.
 
 ## Limits
 

@@ -85,6 +85,11 @@ export function groupsOf(listing: Listing, kind: 'tools' | 'skills'): string[] {
   return [...groups]
 }
 
+// The MCP tools of the session ($.tool.list()) as a tool listing.
+export function mcpTools(listed: readonly { name: string; mcp: boolean }[]): Listing {
+  return parseTools(listed.filter(info => info.mcp).map(info => info.name).join('\n'))
+}
+
 // The groups of `listing` that no decision covers yet.
 export function unseenGroups(
   listing: Listing,

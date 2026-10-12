@@ -6,6 +6,7 @@ import {
   flipKeep,
   groupsOf,
   isAlwaysKept,
+  mcpTools,
   normalize,
   parseKeep,
   parseKept,
@@ -366,11 +367,6 @@ async function trimmed($: EngineInterface, text: string): Promise<string> {
   if (listed === null) return text
   const choice = await choose($, 'tools', mcpTools(listed))
   return trimMcpInstructions(text, new Set(choice.hidden.filter(group => !front.has(group))))
-}
-
-// The MCP tools of the session as a tool listing.
-function mcpTools(listed: ToolInfo[]): Listing {
-  return parseTools(listed.filter(info => info.mcp).map(info => info.name).join('\n'))
 }
 
 // Classifies only the groups not seen before, so a later delta (an MCP server
