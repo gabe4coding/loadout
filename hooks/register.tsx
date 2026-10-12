@@ -1,10 +1,13 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, ToolInfo } from 'claude-code'
+import type { EngineInterface, Register, ToolInfo, TurnStepResult } from 'claude-code'
 
-import type { Choice, Offer, ServerFact, SkillFact } from '../types'
+import type { Choice, Effort, Offer, ServerFact, SkillFact } from '../types'
 import {
   flipKeep,
+  capEffort,
   isNewTask,
+  parseEffort,
+  takesTurnEffort,
   groupsOf,
   isAlwaysKept,
   mcpTools,
@@ -35,6 +38,7 @@ const isOff = atom({ plugin: 'loadout', key: 'isOff' } as const, false)
 const offers = atom({ plugin: 'loadout', key: 'offers' } as const, [])
 const surfaced = atom({ plugin: 'loadout', key: 'surfaced' } as const, [])
 const recent = atom({ plugin: 'loadout', key: 'recent' } as const, [])
+const effort = atom({ plugin: 'loadout', key: 'effort' } as const, { level: null, isFrozen: false })
 const pinned = atom({ plugin: 'loadout', key: 'pinned' } as const, [])
 const marks = atom({ plugin: 'loadout', key: 'marks' } as const, null)
 const skillNames = atom({ plugin: 'loadout', key: 'skillNames' } as const, [])
@@ -71,6 +75,25 @@ const TASK_CHECK = [
 // What a person reads when a later prompt starts a new task.
 const NEW_TASK = 'loadout: this prompt starts a new task. A new session or /clear gives it its own loadout and a smaller context.'
 
+const EFFORT = [
+  'You choose the reasoning effort an AI coding agent needs for its newest prompt.',
+  'Reply with one word: low, medium, high, xhigh or max.',
+  'low: a short answer, a lookup or a one-line change.',
+  'medium: a normal coding task in a few files.',
+  'high: a change across many files, or debugging.',
+  'xhigh: a hard bug, a design decision or a long task with many steps.',
+  'max: only when correctness matters far more than cost.',
+  'If unsure, reply medium.',
+].join('\n')
+
+// A request that keeps less than this part of the cache of the request before
+// it lost the cache.
+const CACHE_KEPT = 0.5
+
+// The shortest life of the prompt cache. After a longer pause the cache can be
+// gone for any reason, so a small cache read then proves nothing.
+const CACHE_LIFE_MS = 5 * 60 * 1000
+
 // How many prompts of the person the new-task check compares with, and how
 // much of each.
 const RECENT = 3
@@ -80,6 +103,14 @@ const RECENT_CHARS = 1000
 // subagent) do not classify the same groups twice. A listing with no new group
 // gets the stored decision at once, with no wait behind a classifier call.
 let queue: Promise<unknown> = Promise.resolve()
+
+// The effort pick for the newest prompt of the person, until the first main
+// request of its turn takes it.
+let picking: Promise<Effort | null> | null = null
+
+// The last main request: its effort, model, cached input (read plus written)
+// and time, for the cache check after a change of effort.
+let last: { sent: string; model: string; cached: number; at: number } | null = null
 
 async function choose($: EngineInterface, kind: Kind, listing: Listing): Promise<Choice> {
   const before = await readChoice($, kind)
@@ -112,8 +143,12 @@ export const register: Register = (on, options) => {
   const file = typeof options.traceFile === 'string' ? options.traceFile : ''
   const alwaysKeep = typeof options.alwaysKeep === 'string' ? parseKeep(options.alwaysKeep) : []
   const checksTask = options.newTaskNote !== false
+  const setsEffort = options.effortPerPrompt === true
 
   on('session.start', async ($, e, next) => {
+    // A new session (also after /clear) starts with no effort history.
+    picking = null
+    last = null
     await $.command.register({
       name: 'loadout',
       description: 'Show the loadout of this session. Also: list, pick, keep <name>, unkeep <name>, off, on',
@@ -127,19 +162,21 @@ export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     const text = e.text.trim()
     if (text === '') return next(e)
-    if ((await read($, prompt)) === null) {
+    const isFirst = (await read($, prompt)) === null
+    if (isFirst) {
       // The session keeps the names of this moment: a server that connects
       // later gets the same names, and a change applies from the next session.
       const names = await keepNow($, alwaysKeep)
       await update($, pinned, () => names)
       await update($, prompt, () => text.slice(0, 4000))
-      if (checksTask && isPerson(e.origin.kind)) await remember($, text)
-      return next(e)
     }
     if (!isPerson(e.origin.kind)) return next(e)
     // The window keeps the prompts sent while the loadout is off too.
-    const earlier = checksTask ? await remember($, text) : []
+    const window = checksTask || setsEffort ? await remember($, text) : []
     if (await read($, isOff)) return next(e)
+    if (setsEffort && !(await read($, effort)).isFrozen) picking = pickEffort($, file, text, window)
+    if (isFirst) return next(e)
+    const earlier = checksTask ? window : []
     const named = new Set(await read($, surfaced))
     const open = (await read($, offers)).filter(offer => !named.has(offer.group))
     if (open.length === 0) {
@@ -151,6 +188,18 @@ export const register: Register = (on, options) => {
     if (picked.length === 0) return next(e)
     return next({ ...e, context: [...(e.context ?? []), ...recallNotes(picked)] })
   }).catch(($, e, next) => next(e))
+
+  // The main requests of a turn get the effort picked for its prompt, at most
+  // the session's own effort. Only on a model that takes the effort in a
+  // message: there a change keeps the cache.
+  on('turn.step', async function* ($, e, next) {
+    if (!setsEffort || e.agentId !== undefined || e.effort === undefined || !takesTurnEffort(e.model)) return yield* next(e)
+    const level = await effortFor($).catch(() => null)
+    const sent = (level === null ? null : capEffort(level, e.effort)) ?? e.effort
+    const result = yield* next(sent === e.effort ? e : { ...e, effort: sent })
+    await watchCache($, file, String(sent), result).catch(() => undefined)
+    return result
+  })
 
   on('prompt.attachment', { type: 'deferred_tools_delta' }, async ($, e, next) => {
     const base = await next(e)
@@ -436,17 +485,72 @@ async function remember($: EngineInterface, text: string): Promise<string[]> {
   return earlier
 }
 
+// Asks the classifier for the effort of a prompt of the person. Null on any
+// failure: the request then keeps the effort it has.
+async function pickEffort($: EngineInterface, file: string, text: string, earlier: string[]): Promise<Effort | null> {
+  const reply = await $.model
+    .complete({
+      model: 'haiku',
+      system: EFFORT,
+      prompt: promptBlock(text, earlier),
+      maxTokens: 20,
+      effort: 'low',
+      timeoutMs: 5000,
+    })
+    .catch(() => null)
+  const picked = reply?.isAnswered ? parseEffort(reply.text) : null
+  trace($, file, { event: 'effort_pick', picked })
+  return picked
+}
+
+// The effort for a main request: the pick of the newest prompt once it is
+// there, else the one before. Null when the plugin leaves the effort alone.
+async function effortFor($: EngineInterface): Promise<Effort | null> {
+  const pending = picking
+  picking = null
+  const [state, off] = await Promise.all([read($, effort), read($, isOff)])
+  if (state.isFrozen) return state.level
+  if (off) return null
+  const picked = pending === null ? null : await pending
+  if (picked === null || picked === state.level) return state.level
+  await update($, effort, now => ({ ...now, level: picked }))
+  $.ui.status(`loadout: effort ${picked}`)
+  return picked
+}
+
+// After a main request with a changed effort: if it lost most of the cache,
+// the model did not take the effort in a message. The effort then stays.
+async function watchCache($: EngineInterface, file: string, sent: string, result: TurnStepResult): Promise<void> {
+  const usage = result.usage
+  if (usage === null) return
+  const before = last
+  const at = await $.clock.now()
+  last = { sent, model: usage.model, cached: usage.cache_read_input_tokens + usage.cache_creation_input_tokens, at }
+  if (before === null || before.sent === sent) return
+  trace($, file, { event: 'effort_change', from: before.sent, to: sent, cacheRead: usage.cache_read_input_tokens })
+  // A change of model, or a pause past the life of the cache, also loses it.
+  if (before.model !== usage.model || at - before.at > CACHE_LIFE_MS) return
+  if (before.cached === 0 || usage.cache_read_input_tokens >= before.cached * CACHE_KEPT) return
+  await update($, effort, now => ({ ...now, isFrozen: true }))
+  trace($, file, { event: 'effort_frozen', level: sent, model: usage.model })
+}
+
+// The prompt of a classifier call on a prompt of the person.
+function promptBlock(text: string, earlier: string[]): string {
+  const before = earlier.length === 0 ? '' : `Earlier prompts:\n${earlier.map(one => `<earlier>\n${one}\n</earlier>`).join('\n')}\n\n`
+  return `${before}Newest prompt:\n<prompt>\n${text.slice(0, 4000)}\n</prompt>`
+}
+
 // Matches a later prompt against the hidden items not yet named, and against
 // the earlier prompts: a toast when it starts a different task. With no
 // earlier prompts the task is not checked.
 async function recall($: EngineInterface, file: string, text: string, earlier: string[], open: Offer[]): Promise<Offer[]> {
-  const before = earlier.length === 0 ? '' : `Earlier prompts:\n${earlier.map(one => `<earlier>\n${one}\n</earlier>`).join('\n')}\n\n`
   const hidden = open.length === 0 ? 'none' : open.map(offer => offer.row).join('\n')
   const reply = await $.model
     .complete({
       model: 'haiku',
       system: earlier.length === 0 ? RECALL : `${RECALL}\n${TASK_CHECK}`,
-      prompt: `${before}Newest prompt:\n<prompt>\n${text.slice(0, 4000)}\n</prompt>\n\nHidden:\n${hidden}`,
+      prompt: `${promptBlock(text, earlier)}\n\nHidden:\n${hidden}`,
       maxTokens: 300,
       effort: 'low',
       timeoutMs: 5000,
@@ -574,7 +678,9 @@ async function classify(
 async function summary($: EngineInterface): Promise<string> {
   if (await read($, isOff)) return 'loadout is off for this session.'
   const [t, s] = [await read($, tools), await read($, skills)]
-  if (t === null && s === null) return 'loadout has not picked a loadout for this session yet. Send a prompt first.'
+  if (t === null && s === null) {
+    return ['loadout has not picked a loadout for this session yet. Send a prompt first.', ...effortLine(await read($, effort))].join('\n')
+  }
   // No tool decision: the session has no ToolSearch or no MCP tools.
   const toolLines = t === null
     ? ['Tool groups hidden: none']
@@ -585,5 +691,11 @@ async function summary($: EngineInterface): Promise<string> {
     `Skills kept: ${s?.kept.join(', ') || 'none'}`,
     `Skills hidden: ${s?.hidden.length ?? 0}`,
     `Named to later prompts: ${(await read($, surfaced)).join(', ') || 'none'}`,
+    ...effortLine(await read($, effort)),
   ].join('\n')
+}
+
+function effortLine(state: { level: string | null; isFrozen: boolean }): string[] {
+  if (state.level === null) return []
+  return [`Effort: ${state.level}${state.isFrozen ? ' (fixed: a change lost the prompt cache on this model)' : ''}`]
 }

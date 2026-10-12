@@ -1,7 +1,7 @@
 // Pure text work: parse the listings the engine injects, group their entries,
 // and rebuild them with only the groups the classifier kept.
 
-import type { ServerFact, SkillFact } from '../types'
+import type { Effort, ServerFact, SkillFact } from '../types'
 
 // A deferred tool line is one bare name; an MCP tool is mcp__<server>__<tool>.
 const TOOL_LINE = /^[A-Za-z0-9_.:-]+$/
@@ -211,6 +211,29 @@ export function parseKept(reply: string, groups: readonly string[]): string[] {
 export function isNewTask(reply: string): boolean {
   const first = reply.trim().split('\n')[0] ?? ''
   return /^[-*\s`"]*new task[`"\s.:]*$/i.test(first)
+}
+
+const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
+const EFFORT_WORD = /(?<![a-z])(low|medium|high|xhigh|max)(?![a-z])/gi
+
+// The effort level a reply names, or null when it names none or several.
+export function parseEffort(reply: string): Effort | null {
+  const named = new Set([...reply.matchAll(EFFORT_WORD)].map(match => match[1]?.toLowerCase() as Effort))
+  return named.size === 1 ? ([...named][0] ?? null) : null
+}
+
+// The lower of two levels: the plugin may lower the session's effort, never
+// raise it. Null when the session's effort is not a level (a number).
+export function capEffort(picked: Effort, session: string | number): Effort | null {
+  const ceiling = EFFORTS.indexOf(session as Effort)
+  if (ceiling === -1) return null
+  return EFFORTS[Math.min(EFFORTS.indexOf(picked), ceiling)] ?? null
+}
+
+// The models that take the effort in a message (per-turn control), so a change
+// keeps the prompt cache. On other models a change rebuilds the whole cache.
+export function takesTurnEffort(model: string): boolean {
+  return /^claude-(sonnet-5-5|opus-5-5|opus-5|fable-5-1|mythos-5-1|haiku-5-5)(?![-.\d])/.test(model)
 }
 
 export function rebuild(

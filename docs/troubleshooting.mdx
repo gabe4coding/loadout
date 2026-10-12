@@ -54,6 +54,9 @@ Add this entry to `~/.claude/settings.json`:
 | `listing` | The plugin gets a tool listing or a skill listing | `type`, `isScoped`, `kept`, `alwaysKept`, `hidden` |
 | `mcp_instructions` | The plugin gets the MCP server instructions | `where`, `removed` |
 | `recall` | The plugin checks a later prompt | `named`, `isNewTask` |
+| `effort_pick` | The classifier picks the effort of a prompt | `picked` |
+| `effort_change` | A main request goes out with an effort other than the request before it | `from`, `to`, `cacheRead` |
+| `effort_frozen` | A request after a change of effort lost most of the cache. The effort stays for the session. | `level`, `model` |
 
 If `isScoped` is `false`, the plugin kept the full listing. These are the causes:
 
@@ -70,4 +73,7 @@ The trace contains names and counts only, not the text of your prompts.
 - If Claude Code builds a listing before the plugin has the first prompt, that listing is complete. The plugin then
   does not change it, to keep the prompt cache valid.
 - The classifier sees only names and short descriptions. A server with an unclear name can be hidden by mistake.
+- With `effortPerPrompt` on, the cache can expire before 5 minutes for other causes (for example, a change of the
+  system prompt). If this occurs on the request where the effort changes, the plugin keeps that effort for the rest of
+  the session.
 - The plugin uses the hooks module API of Claude Code. A new Claude Code release can change this API.

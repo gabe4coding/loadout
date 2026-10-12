@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import {
+  capEffort,
   flipKeep,
   isAlwaysKept,
   isLoginOnly,
@@ -8,6 +9,7 @@ import {
   listedSkillFacts,
   mcpTools,
   parseKeep,
+  parseEffort,
   parseKept,
   parseSkills,
   parseTools,
@@ -17,6 +19,7 @@ import {
   serverLabel,
   skillDetail,
   splitMcpName,
+  takesTurnEffort,
   trimMcpInstructions,
   unseenGroups,
 } from '../hooks/scope'
@@ -141,4 +144,23 @@ test('gives a skill fact the listed name that adds its plugin, when one name fit
     'pdf',
   ])
   expect(listedSkillFacts([fact('skill-creator')], listed).map(f => f.name)).toEqual(['skill-creator'])
+})
+
+test('reads one effort level from a reply, and caps it at the session level', () => {
+  expect(parseEffort('high')).toBe('high')
+  expect(parseEffort('`xhigh`.')).toBe('xhigh')
+  expect(parseEffort('low or high')).toBe(null)
+  expect(parseEffort('hard')).toBe(null)
+  expect(capEffort('max', 'medium')).toBe('medium')
+  expect(capEffort('low', 'high')).toBe('low')
+  expect(capEffort('low', 5000)).toBe(null)
+})
+
+test('changes the effort only on models that take it in a message', () => {
+  expect(takesTurnEffort('claude-sonnet-5-5')).toBe(true)
+  expect(takesTurnEffort('claude-opus-5-5[1m]')).toBe(true)
+  expect(takesTurnEffort('claude-opus-5')).toBe(true)
+  expect(takesTurnEffort('claude-sonnet-5')).toBe(false)
+  expect(takesTurnEffort('claude-opus-4-8')).toBe(false)
+  expect(takesTurnEffort('claude-opus-5-1')).toBe(false)
 })

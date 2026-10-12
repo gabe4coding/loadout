@@ -21,6 +21,13 @@
       "default": true,
       "required": false
     },
+    "effortPerPrompt": {
+      "type": "boolean",
+      "title": "Effort for each prompt",
+      "description": "If true, the classifier picks the effort for each prompt that you send. The plugin only lowers the effort of the session, and only on models that keep the prompt cache when the effort changes.",
+      "default": false,
+      "required": false
+    },
     "traceFile": {
       "type": "string",
       "title": "Trace file",

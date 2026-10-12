@@ -1,5 +1,6 @@
 import type { On } from 'claude-code'
-import { expect, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 import { parseTools } from '../hooks/scope'
 
@@ -207,6 +208,7 @@ test('with nothing left to name, checks the task without holding the prompt', as
   on('prompt.attachment', ($, e) => ({ text: e.text }))
   quiet(on, toasts)
   listed(on)
+  const clock = mock.clock(on)
   on('model.complete', ($, e) =>
     answer(String(e.prompt).includes('<prompt>') ? 'NEW TASK' : 'claude_in_chrome\ndatadog\nslack'),
   )
@@ -214,8 +216,8 @@ test('with nothing left to name, checks the task without holding the prompt', as
   await $.prompt.submit({ text: 'Check the login page in the browser', wait: false, origin: COMPOSER } as never)
   await $.prompt.attachment({ type: 'deferred_tools_delta', text: TOOLS, origin: ENGINE } as never)
   await $.prompt.submit({ text: 'Write a script that totals the invoice files', wait: false, origin: COMPOSER } as never)
-  // The check runs after the prompt: wait for its toast.
-  for (let i = 0; i < 100 && toasts.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 10))
+  // The check runs after the prompt: let it settle.
+  await clock.advance(0)
 
   expect(seen[1]).toEqual([])
   expect(toasts).toHaveLength(1)
@@ -237,6 +239,116 @@ test('with newTaskNote off, checks no task and asks nothing when nothing is hidd
 
   expect(asked).toEqual([])
   expect(toasts).toEqual([])
+})
+
+// The engine's request beneath turn.step: records the effort each request
+// was sent with, and answers with the cache use that `cache` gives.
+function requests(on: On, cache: () => { read: number; written: number } = () => ({ read: 1000, written: 100 })): unknown[] {
+  const sent: unknown[] = []
+  on('turn.step', async function* ($, e) {
+    sent.push(e.effort)
+    const { read, written } = cache()
+    const usage = { model: e.model, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: read, cache_creation_input_tokens: written }
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage } as never
+  })
+  return sent
+}
+
+// One main request (or a subagent's, with `agentId`), read to its end.
+async function step($: Engine, turnId: string, more: Record<string, unknown> = {}): Promise<void> {
+  const stream = $.turn.step({ turnId, index: 0, model: 'claude-sonnet-5-5', effort: 'high', messageCount: 3, ...more } as never)
+  for await (const _ of stream);
+}
+
+// The classifier: `level` for an effort pick, the first group for the rest.
+function picks(on: On, level: () => string): void {
+  on('model.complete', ($, e) => answer(String(e.system).includes('reasoning effort') ? level() : 'claude_in_chrome'))
+}
+
+test('sets the picked effort on the main requests only, never above the session effort', { options: { effortPerPrompt: true } }, async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on)
+  const sent = requests(on)
+  let level = 'low'
+  picks(on, () => level)
+
+  await $.prompt.submit({ text: 'What does this function return?', wait: false, origin: COMPOSER } as never)
+  await step($, 't1')
+  await step($, 't1', { agentId: 'sub' })
+  await step($, 't1', { model: 'claude-sonnet-5' })
+  level = 'max'
+  await $.prompt.submit({ text: 'Redesign the storage layer', wait: false, origin: COMPOSER } as never)
+  await step($, 't2')
+
+  expect(sent).toEqual(['low', 'high', 'high', 'high'])
+})
+
+test('keeps the effort for the session once a change lost the cache', { options: { effortPerPrompt: true } }, async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on)
+  mock.clock(on)
+  let cache = { read: 1000, written: 100 }
+  const sent = requests(on, () => cache)
+  let level = 'low'
+  picks(on, () => level)
+
+  await $.prompt.submit({ text: 'What does this function return?', wait: false, origin: COMPOSER } as never)
+  await step($, 't1')
+  level = 'medium'
+  cache = { read: 0, written: 1200 }
+  await $.prompt.submit({ text: 'Fix the failing test', wait: false, origin: COMPOSER } as never)
+  await step($, 't2')
+  level = 'low'
+  cache = { read: 1200, written: 50 }
+  await $.prompt.submit({ text: 'And rename it', wait: false, origin: COMPOSER } as never)
+  await step($, 't3')
+
+  expect(sent).toEqual(['low', 'medium', 'medium'])
+  expect((await $.command.run(run(''))).text).toContain('Effort: medium (fixed')
+})
+
+test('does not keep the effort when the cache was lost to a pause or a change of model', { options: { effortPerPrompt: true } }, async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on)
+  const clock = mock.clock(on)
+  let cache = { read: 1000, written: 100 }
+  const sent = requests(on, () => cache)
+  let level = 'low'
+  picks(on, () => level)
+
+  await $.prompt.submit({ text: 'What does this function return?', wait: false, origin: COMPOSER } as never)
+  await step($, 't1')
+  await clock.advance(10 * 60 * 1000)
+  level = 'medium'
+  cache = { read: 0, written: 1200 }
+  await $.prompt.submit({ text: 'Fix the failing test', wait: false, origin: COMPOSER } as never)
+  await step($, 't2')
+  level = 'low'
+  await $.prompt.submit({ text: 'Now on the other model', wait: false, origin: COMPOSER } as never)
+  await step($, 't3', { model: 'claude-opus-5-5' })
+  level = 'medium'
+  cache = { read: 1200, written: 50 }
+  await $.prompt.submit({ text: 'And rename it', wait: false, origin: COMPOSER } as never)
+  await step($, 't4', { model: 'claude-opus-5-5' })
+
+  expect(sent).toEqual(['low', 'medium', 'low', 'medium'])
+  expect((await $.command.run(run(''))).text).not.toContain('(fixed')
+})
+
+test('leaves the effort alone when effortPerPrompt is off', async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on)
+  const sent = requests(on)
+  picks(on, () => 'low')
+
+  await $.prompt.submit({ text: 'What does this function return?', wait: false, origin: COMPOSER } as never)
+  await step($, 't1')
+
+  expect(sent).toEqual(['high'])
 })
 
 // With tool search off, Claude Code puts every MCP tool in the prompt and
