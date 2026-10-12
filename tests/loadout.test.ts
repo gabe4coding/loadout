@@ -441,7 +441,7 @@ test('/loadout off sends the next requests to the session model', { options: { m
 
 test('answers /loadout under its plugin name too', async ($, on) => {
   quiet(on)
-  const { text } = await $.command.run({ ...run('off'), command: 'loadout:loadout' } as never)
+  const { text } = await $.command.run({ command: 'loadout:loadout', args: 'off', origin: COMPOSER } as never)
   expect(text).toContain('loadout is off')
 })
 
