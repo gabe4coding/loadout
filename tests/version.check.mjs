@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const MANIFEST = '.claude-plugin/plugin.json'
-const PLUGIN_PATHS = ['hooks/', 'types/', MANIFEST]
+const PLUGIN_PATHS = ['hooks/', 'commands/', 'types/', MANIFEST]
 
 const git = (...args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim()
 const parts = version => version.split('.').map(Number)
