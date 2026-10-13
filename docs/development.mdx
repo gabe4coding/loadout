@@ -14,8 +14,9 @@ The full repo is the plugin. Claude Code loads the hooks module from `hooks/hook
 | `.claude-plugin/` | The plugin manifest (`plugin.json`) and the marketplace manifest. |
 | `hooks/register.tsx` | The hooks, the classifier calls, the notes for later prompts, `/loadout` and its pane. |
 | `hooks/scope.ts` | Pure helpers: parse a listing, group its items, rebuild it with a note. |
-| `types/index.d.ts` | The state that the plugin keeps for a session. |
-| `tests/` | The tests of the hooks, the checks for docs and versions, and a smoke test with real Claude Code. |
+| `types/index.d.ts` | The state that the plugin keeps for a session, the options and the lines of the trace file. |
+| `tests/` | The tests of the hooks, the checks for docs, contracts and versions, and a smoke test with real Claude Code. |
+| `tests/kit.ts` | Typed builders for the engine inputs and the fake replies of the hook tests. |
 | `tests/session.mjs` | Starts one real Claude Code session with the plugin and the fake MCP servers. |
 | `evals/` | The impact eval: the tasks, the fixed setup of servers and skills, and the runner. |
 | `.claude/skills/verify/` | The recipe that `/verify` reads: how to drive the plugin in real Claude Code. |
@@ -29,7 +30,7 @@ are in `CODING_STANDARDS.md`.
 1. Run `/simplify`. This built-in skill cleans up the diff and applies the fixes.
 2. Run `/code-review`. This built-in skill looks for bugs in the diff. Fix each bug that it finds. If you do not
    fix a finding, write the reason in the commit message.
-3. Run the three checks in [Checks](#checks).
+3. Run the checks in [Checks](#checks).
 4. Run `/verify` after a change to `hooks/`, `types/` or `.claude-plugin/plugin.json`. This built-in skill drives
    the change end to end in real Claude Code. It reads the recipe in `.claude/skills/verify/`. Skip this step when
    the diff changes only tests or docs.
@@ -44,7 +45,7 @@ node .claude/skills/verify/drive.mjs run 'List the open issues of project OPS.' 
 
 ## Checks
 
-Run all three checks before each commit:
+Run all five checks before each commit:
 
 ```bash
 claude plugin validate .
@@ -58,11 +59,21 @@ claude plugin test .
 node tests/docs.check.mjs
 ```
 
+```bash
+npx -p typescript@7.0.2 tsc -p tsconfig.json
+```
+
+```bash
+node tests/contract.check.mjs
+```
+
 - `claude plugin validate .` reads the manifests and the hooks module as Claude Code does.
 - `claude plugin test .` tests the hooks with a fake host. The tests replace the Haiku call with a fixed reply.
 - `tests/docs.check.mjs` checks the rules for the docs.
+- `tsc` checks the types of the hooks and the tests. See [Type check](#type-check).
+- `tests/contract.check.mjs` checks the contracts that the types cannot see. Each error says what to use instead.
 
-CI (`.github/workflows/test.yml`) runs the three checks for each push to `main` and each pull request:
+CI (`.github/workflows/test.yml`) runs the checks for each push to `main` and each pull request, but not `tsc`:
 
 - It runs `claude plugin test .` with a fixed Claude Code version. To use a newer version, run the tests with it on
   your machine first. Then change the version in the workflow.
@@ -166,16 +177,13 @@ The plugin saves more when the listings are longer. Thus the result depends on t
 
 ## Type check
 
-To develop with the engine types in your editor, load the plugin one time with `claude --plugin-dir .`. Claude Code
-then writes `.claude-plugin/types/`, which `tsconfig.json` uses. Git does not track this folder. Without it, `tsc`
-fails with TS2688. To check the types, run this command:
-
-```bash
-npx -p typescript tsc -p tsconfig.json
-```
+To check the types, load the plugin one time with `claude --plugin-dir .`. Claude Code then writes
+`.claude-plugin/types/`, which `tsconfig.json` uses. Git does not track this folder. Without it, `tsc` fails with
+TS2688.
 
 CI does not run the type check. Claude Code writes the types only in a session that is logged in, and CI has no
-login.
+login. When you raise the pinned Claude Code version in `.github/workflows/test.yml`, load the plugin with that
+version, then run the type check and fix each error.
 
 ## Try a change
 
@@ -188,7 +196,7 @@ login.
 
 1. Increase `version` in `.claude-plugin/plugin.json`. Claude Code caches a plugin by its version, so without a new
    version, users do not get the change.
-2. Run the three checks and the smoke test.
+2. Run the five checks and the smoke test.
 3. Optional: run `node tests/version.check.mjs` to do the version check of CI before you push.
 
 ## More

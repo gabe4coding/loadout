@@ -1,8 +1,10 @@
-import type { On } from 'claude-code'
+import type { On, SessionUsage, ToolInfo } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
 import { parseTools } from '../hooks/scope'
+import type { CommandWord } from '../hooks/scope'
+import { USAGE, answer, attach, breakdown, command, failed, firstQuestion, listed, quiet, submit } from './kit'
 
 const TOOLS = [
   'The following deferred tools are now available via ToolSearch:',
@@ -33,44 +35,23 @@ const MCP = [
   'Chrome rules.',
 ].join('\n')
 
-const ENGINE = { kind: 'engine' } as const
-
 // The MCP instructions as an attachment: the blocks, with no header.
 const BLOCKS = MCP.slice(MCP.indexOf('## datadog'))
 
 // The MCP tools of TOOLS as $.tool.list() gives them.
-const LISTED = parseTools(TOOLS)
+const LISTED: ToolInfo[] = parseTools(TOOLS)
   .entries.map(entry => entry.name)
   .filter(name => name.startsWith('mcp__'))
   .map(name => ({ name, description: '', mcp: true }))
 
-const SEARCH = { name: 'ToolSearch', description: 'Load deferred tools', mcp: false }
+const SEARCH: ToolInfo = { name: 'ToolSearch', description: 'Load deferred tools', mcp: false }
 
-// $.tool.list() as the engine answers it: with tool search on unless `tools`
-// says otherwise.
-function listed(on: On, tools: object[] = [SEARCH, ...LISTED]): void {
-  on('tool.list', () => ({ value: tools }) as never)
-}
-
-// A classifier that replies `text`.
-function answer(text: string) {
-  return { value: { isAnswered: true, text, usage: { inputTokens: 1, outputTokens: 1 } } } as never
-}
-
-// The engine's own ui.status, ui.invalidate and ui.toast, which the kit
-// leaves out. Each toast text goes into `toasts`.
-function quiet(on: On, toasts: string[] = []): void {
-  on('ui.status', () => ({ value: undefined }))
-  on('ui.invalidate', () => ({ value: undefined }))
-  on('ui.toast', ($, e) => {
-    toasts.push(String(e.text))
-    return { value: undefined }
-  })
-}
+// The tools of a session with tool search on.
+const ALL = [SEARCH, ...LISTED]
 
 // The plugin's store across sessions. Returns what it holds, for checks.
 function fakeStore(on: On, held: Record<string, unknown> = {}): Record<string, unknown> {
-  on('store.get', ($, e) => ({ value: held[e.key] }) as never)
+  on('store.get', ($, e) => ({ value: held[e.key] }))
   on('store.set', ($, e) => {
     held[e.key] = e.value
     return { value: undefined }
@@ -78,16 +59,13 @@ function fakeStore(on: On, held: Record<string, unknown> = {}): Record<string, u
   return held
 }
 
-// The MCP tools of the session, as $.tool.list() answers.
-const COMPOSER = { kind: 'composer' } as const
-const run = (args: string) => ({ command: 'loadout', args, origin: COMPOSER, presentation: { isFullscreen: false, columns: 80 } }) as never
 // The always-keep picker on a surface that draws an Input.
 const pane = <S extends 'terminal' | 'desktop'>(surface: S) => ({
   plugin: 'loadout',
   surface,
   component: 'Pane' as const,
   requestId: 'loadout-keep',
-  props: { title: 'loadout', isFocused: true, bodyColumns: 80, placement: 'inline' } as never,
+  props: { title: 'loadout', isFocused: true, bodyColumns: 80, placement: 'inline' as const, scroll: { offset: 0, bodyRows: 40 }, view: {} },
 })
 
 test('keeps only what the classifier picks, and says what it hid', async ($, on) => {
@@ -95,20 +73,20 @@ test('keeps only what the classifier picks, and says what it hid', async ($, on)
   on('prompt.attachment', ($, e) => ({ text: e.text }))
   on('prompt.section', ($, e) => ({ text: e.text }))
   quiet(on)
-  listed(on)
+  listed(on, ALL)
   on('model.complete', ($, e) =>
     answer(String(e.prompt).includes('dep-scan') ? 'local-tools:dep-scan\nnot-a-skill' : 'claude_in_chrome'),
   )
 
-  await $.prompt.submit({ text: 'Check the login page in the browser for a CVE', wait: false } as never)
+  await submit($, 'Check the login page in the browser for a CVE')
 
-  const tools = await $.prompt.attachment({ type: 'deferred_tools_delta', text: TOOLS, origin: ENGINE } as never)
+  const tools = await attach($, 'deferred_tools_delta', TOOLS)
   expect(tools.text).toContain('CronCreate')
   expect(tools.text).toContain('mcp__claude-in-chrome__navigate')
   expect(tools.text).not.toContain('mcp__datadog__search_logs')
   expect(tools.text).toContain('datadog (2), slack (1)')
 
-  const skills = await $.prompt.attachment({ type: 'skill_listing', text: SKILLS, origin: ENGINE } as never)
+  const skills = await attach($, 'skill_listing', SKILLS)
   expect(skills.text).toContain('local-tools:dep-scan')
   expect(skills.text).not.toContain('riff:title')
   expect(skills.text).not.toContain('three length categories')
@@ -123,11 +101,11 @@ test('keeps everything when the classifier fails', async ($, on) => {
   on('prompt.submit', ($, e) => ({ text: e.text }))
   on('prompt.attachment', ($, e) => ({ text: e.text }))
   quiet(on)
-  listed(on)
-  on('model.complete', () => ({ value: { isAnswered: false, reason: 'api-error', status: 500, error: 'x' } }) as never)
+  listed(on, ALL)
+  on('model.complete', () => failed())
 
-  await $.prompt.submit({ text: 'Anything', wait: false } as never)
-  const tools = await $.prompt.attachment({ type: 'deferred_tools_delta', text: TOOLS, origin: ENGINE } as never)
+  await submit($, 'Anything')
+  const tools = await attach($, 'deferred_tools_delta', TOOLS)
   expect(tools.text).toBe(TOOLS)
 })
 
@@ -141,30 +119,30 @@ test('traces the token use of each classifier call, also a failed one', { option
   on('prompt.submit', ($, e) => ({ text: e.text }))
   on('prompt.attachment', ($, e) => ({ text: e.text }))
   quiet(on)
-  listed(on)
+  listed(on, ALL)
   const clock = mock.clock(on)
   on('model.complete', ($, e) =>
     String(e.prompt).includes('dep-scan')
-      ? ({ value: { isAnswered: false, reason: 'api-error', status: 500, error: 'x' } } as never)
+      ? failed()
       : answer('claude_in_chrome'),
   )
 
-  await $.prompt.submit({ text: 'Check the login page in the browser', wait: false, origin: COMPOSER } as never)
-  await $.prompt.attachment({ type: 'deferred_tools_delta', text: TOOLS, origin: ENGINE } as never)
-  await $.prompt.attachment({ type: 'skill_listing', text: SKILLS, origin: ENGINE } as never)
+  await submit($, 'Check the login page in the browser')
+  await attach($, 'deferred_tools_delta', TOOLS)
+  await attach($, 'skill_listing', SKILLS)
 
   // Trace lines are written one after the other: let them settle.
   await clock.advance(0)
   const calls = written.split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(line => line.event === 'classifier')
   expect(calls).toEqual([
-    { event: 'classifier', purpose: 'tools', model: 'haiku', isAnswered: true, usage: { inputTokens: 1, outputTokens: 1 } },
+    { event: 'classifier', purpose: 'tools', model: 'haiku', isAnswered: true, usage: USAGE },
     { event: 'classifier', purpose: 'skills', model: 'haiku', isAnswered: false, usage: null },
   ])
 })
 
 test('passes listings through before the first prompt', async ($, on) => {
   on('prompt.attachment', ($, e) => ({ text: e.text }))
-  const skills = await $.prompt.attachment({ type: 'skill_listing', text: SKILLS, origin: ENGINE } as never)
+  const skills = await attach($, 'skill_listing', SKILLS)
   expect(skills.text).toBe(SKILLS)
 })
 
@@ -176,7 +154,7 @@ test('names hidden tools a later prompt needs, once, without changing the lists'
   })
   on('prompt.attachment', ($, e) => ({ text: e.text }))
   quiet(on)
-  listed(on)
+  listed(on, ALL)
   on('model.complete', ($, e) => {
     const asked = String(e.prompt)
     const newest = /<prompt>([\s\S]*)<\/prompt>/.exec(asked)?.[1]
@@ -184,18 +162,75 @@ test('names hidden tools a later prompt needs, once, without changing the lists'
     return answer(text)
   })
 
-  await $.prompt.submit({ text: 'Check the login page in the browser', wait: false, origin: COMPOSER } as never)
-  const first = await $.prompt.attachment({ type: 'deferred_tools_delta', text: TOOLS, origin: ENGINE } as never)
+  await submit($, 'Check the login page in the browser')
+  const first = await attach($, 'deferred_tools_delta', TOOLS)
   expect(first.text).not.toContain('mcp__datadog__search_logs')
 
-  await $.prompt.submit({ text: 'Rename this variable', wait: false, origin: COMPOSER } as never)
-  await $.prompt.submit({ text: 'Now look at the error logs for it', wait: false, origin: COMPOSER } as never)
-  await $.prompt.submit({ text: 'And the logs from yesterday', wait: false, origin: COMPOSER } as never)
+  await submit($, 'Rename this variable')
+  await submit($, 'Now look at the error logs for it')
+  await submit($, 'And the logs from yesterday')
 
   expect(seen[1]).toEqual([])
   expect(seen[2]?.join('\n')).toContain('datadog (2 tools): search_logs, get_trace')
   expect(seen[2]?.join('\n')).toContain('ToolSearch')
   expect(seen[3]).toEqual([])
+})
+
+// Each word of /loadout but off, as a person types it. The type makes a new
+// word fail the type check until it has a line here.
+const TYPED: Record<Exclude<CommandWord, 'off'>, readonly string[]> = {
+  list: ['list'],
+  pick: ['pick'],
+  keep: ['keep datadog', 'keep riff'],
+  unkeep: ['unkeep datadog'],
+  effort: ['effort off', 'effort on'],
+  model: ['model on', 'model off'],
+  on: ['on'],
+}
+
+// The rule of AGENTS.md: the listings sit in the first message, so a change
+// after the first request spends the prompt cache of the whole conversation.
+// Each listing raised again after later prompts, commands, requests and a
+// classifier that now keeps everything must come back as the first time.
+test('never changes a listing after the first request, whatever comes later', { options: { effortPerPrompt: true } }, async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  on('prompt.attachment', ($, e) => ({ text: e.text }))
+  on('prompt.section', ($, e) => ({ text: e.text }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  quiet(on)
+  listed(on, ALL)
+  fakeStore(on)
+  requests(on)
+  let keep = 'claude_in_chrome\nlocal-tools:dep-scan'
+  picks(on, () => 'low', 'reasoning effort', () => keep)
+  const raise = async () => [
+    (await attach($, 'deferred_tools_delta', TOOLS)).text,
+    (await attach($, 'skill_listing', SKILLS)).text,
+    (await attach($, 'mcp_instructions_delta', BLOCKS)).text,
+    (await $.prompt.section({ name: 'mcp_instructions', text: MCP })).text,
+  ]
+
+  await submit($, 'Check the login page in the browser')
+  const first = await raise()
+  expect(first[0]).not.toContain('mcp__datadog__search_logs')
+  await step($, 't1')
+
+  keep = 'claude_in_chrome\ndatadog\nslack\nlocal-tools:dep-scan\nriff:title\nupdate-config'
+  await submit($, 'Now look at the error logs and the riff titles')
+  await step($, 't2')
+  for (const args of ['', ...Object.values(TYPED).flat()]) {
+    await command($, args)
+    expect(await raise()).toEqual(first)
+  }
+  await submit($, 'And the logs from yesterday')
+  await step($, 't3')
+  expect(await raise()).toEqual(first)
+
+  // /loadout off is the one change the person asks for. On again brings back the same listings.
+  await command($, 'off')
+  expect((await raise())[0]).toBe(TOOLS)
+  await command($, 'on')
+  expect(await raise()).toEqual(first)
 })
 
 test('tells the person when a later prompt starts a new task, and leaves the prompt as it is', async ($, on) => {
@@ -208,7 +243,7 @@ test('tells the person when a later prompt starts a new task, and leaves the pro
   })
   on('prompt.attachment', ($, e) => ({ text: e.text }))
   quiet(on, toasts)
-  listed(on)
+  listed(on, ALL)
   on('model.complete', ($, e) => {
     const prompt = String(e.prompt)
     asked.push(prompt)
@@ -216,10 +251,10 @@ test('tells the person when a later prompt starts a new task, and leaves the pro
     return answer(newest === undefined ? 'claude_in_chrome' : newest.includes('invoice') ? 'NEW TASK' : 'none')
   })
 
-  await $.prompt.submit({ text: 'Check the login page in the browser', wait: false, origin: COMPOSER } as never)
-  await $.prompt.attachment({ type: 'deferred_tools_delta', text: TOOLS, origin: ENGINE } as never)
-  await $.prompt.submit({ text: 'Now fix the button color', wait: false, origin: COMPOSER } as never)
-  await $.prompt.submit({ text: 'Write a script that totals the invoice files', wait: false, origin: COMPOSER } as never)
+  await submit($, 'Check the login page in the browser')
+  await attach($, 'deferred_tools_delta', TOOLS)
+  await submit($, 'Now fix the button color')
+  await submit($, 'Write a script that totals the invoice files')
 
   expect(toasts).toHaveLength(1)
   expect(toasts[0]).toContain('new task')
@@ -238,15 +273,15 @@ test('with nothing left to name, checks the task without holding the prompt', as
   })
   on('prompt.attachment', ($, e) => ({ text: e.text }))
   quiet(on, toasts)
-  listed(on)
+  listed(on, ALL)
   const clock = mock.clock(on)
   on('model.complete', ($, e) =>
     answer(String(e.prompt).includes('<prompt>') ? 'NEW TASK' : 'claude_in_chrome\ndatadog\nslack'),
   )
 
-  await $.prompt.submit({ text: 'Check the login page in the browser', wait: false, origin: COMPOSER } as never)
-  await $.prompt.attachment({ type: 'deferred_tools_delta', text: TOOLS, origin: ENGINE } as never)
-  await $.prompt.submit({ text: 'Write a script that totals the invoice files', wait: false, origin: COMPOSER } as never)
+  await submit($, 'Check the login page in the browser')
+  await attach($, 'deferred_tools_delta', TOOLS)
+  await submit($, 'Write a script that totals the invoice files')
   // The check runs after the prompt: let it settle.
   await clock.advance(0)
 
@@ -259,14 +294,14 @@ test('with newTaskNote off, checks no task and asks nothing when nothing is hidd
   const toasts: string[] = []
   on('prompt.submit', ($, e) => ({ text: e.text }))
   quiet(on, toasts)
-  listed(on)
+  listed(on, ALL)
   on('model.complete', ($, e) => {
     asked.push(String(e.prompt))
     return answer('NEW TASK')
   })
 
-  await $.prompt.submit({ text: 'Check the login page in the browser', wait: false, origin: COMPOSER } as never)
-  await $.prompt.submit({ text: 'Write a script that totals the invoice files', wait: false, origin: COMPOSER } as never)
+  await submit($, 'Check the login page in the browser')
+  await submit($, 'Write a script that totals the invoice files')
 
   expect(asked).toEqual([])
   expect(toasts).toEqual([])
@@ -284,38 +319,38 @@ function requests(
   on('turn.step', async function* ($, e) {
     sent.push(of(e))
     const { read, written } = cache()
-    const usage = { model: e.model, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: read, cache_creation_input_tokens: written }
-    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage } as never
+    const usage = { ...USAGE, model: e.model, cache_read_input_tokens: read, cache_creation_input_tokens: written }
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage }
   })
   return sent
 }
 
 // One main request (or a subagent's, with `agentId`), read to its end.
 async function step($: Engine, turnId: string, more: Record<string, unknown> = {}): Promise<void> {
-  const stream = $.turn.step({ turnId, index: 0, model: 'claude-sonnet-5-5', effort: 'high', messageCount: 3, ...more } as never)
+  const stream = $.turn.step({ turnId, index: 0, model: 'claude-sonnet-5-5', effort: 'high', messageCount: 3, ...more })
   for await (const _ of stream);
 }
 
 // The classifier: `level` for the pick whose system names `marker` (the
-// effort by default), the first group for the rest.
-function picks(on: On, level: () => string, marker = 'reasoning effort'): void {
-  on('model.complete', ($, e) => answer(String(e.system).includes(marker) ? level() : 'claude_in_chrome'))
+// effort by default), `rest` (the first group by default) for the others.
+function picks(on: On, level: () => string, marker = 'reasoning effort', rest: () => string = () => 'claude_in_chrome'): void {
+  on('model.complete', ($, e) => answer(String(e.system).includes(marker) ? level() : rest()))
 }
 
 test('sets the picked effort on the main requests only, never above the session effort', { options: { effortPerPrompt: true } }, async ($, on) => {
   on('prompt.submit', ($, e) => ({ text: e.text }))
   quiet(on)
-  listed(on)
+  listed(on, ALL)
   const sent = requests(on)
   let level = 'low'
   picks(on, () => level)
 
-  await $.prompt.submit({ text: 'What does this function return?', wait: false, origin: COMPOSER } as never)
+  await submit($, 'What does this function return?')
   await step($, 't1')
   await step($, 't1', { agentId: 'sub' })
   await step($, 't1', { model: 'claude-sonnet-5' })
   level = 'max'
-  await $.prompt.submit({ text: 'Redesign the storage layer', wait: false, origin: COMPOSER } as never)
+  await submit($, 'Redesign the storage layer')
   await step($, 't2')
 
   expect(sent).toEqual(['low', 'high', 'high', 'high'])
@@ -324,58 +359,58 @@ test('sets the picked effort on the main requests only, never above the session 
 test('keeps the effort for the session once a change lost the cache', { options: { effortPerPrompt: true } }, async ($, on) => {
   on('prompt.submit', ($, e) => ({ text: e.text }))
   quiet(on)
-  listed(on)
+  listed(on, ALL)
   mock.clock(on)
   let cache = { read: 1000, written: 100 }
   const sent = requests(on, () => cache)
   let level = 'low'
   picks(on, () => level)
 
-  await $.prompt.submit({ text: 'What does this function return?', wait: false, origin: COMPOSER } as never)
+  await submit($, 'What does this function return?')
   await step($, 't1')
   level = 'medium'
   cache = { read: 0, written: 1200 }
-  await $.prompt.submit({ text: 'Fix the failing test', wait: false, origin: COMPOSER } as never)
+  await submit($, 'Fix the failing test')
   await step($, 't2')
   level = 'low'
   cache = { read: 1200, written: 50 }
-  await $.prompt.submit({ text: 'And rename it', wait: false, origin: COMPOSER } as never)
+  await submit($, 'And rename it')
   await step($, 't3')
 
-  await $.command.run(run('effort off'))
+  await command($, 'effort off')
   await step($, 't4')
 
   expect(sent).toEqual(['low', 'medium', 'medium', 'medium'])
-  expect((await $.command.run(run(''))).text).toContain('Effort: medium (fixed')
+  expect((await command($, '')).text).toContain('Effort: medium (fixed')
 })
 
 test('does not keep the effort when the cache was lost to a pause or a change of model', { options: { effortPerPrompt: true } }, async ($, on) => {
   on('prompt.submit', ($, e) => ({ text: e.text }))
   quiet(on)
-  listed(on)
+  listed(on, ALL)
   const clock = mock.clock(on)
   let cache = { read: 1000, written: 100 }
   const sent = requests(on, () => cache)
   let level = 'low'
   picks(on, () => level)
 
-  await $.prompt.submit({ text: 'What does this function return?', wait: false, origin: COMPOSER } as never)
+  await submit($, 'What does this function return?')
   await step($, 't1')
   await clock.advance(10 * 60 * 1000)
   level = 'medium'
   cache = { read: 0, written: 1200 }
-  await $.prompt.submit({ text: 'Fix the failing test', wait: false, origin: COMPOSER } as never)
+  await submit($, 'Fix the failing test')
   await step($, 't2')
   level = 'low'
-  await $.prompt.submit({ text: 'Now on the other model', wait: false, origin: COMPOSER } as never)
+  await submit($, 'Now on the other model')
   await step($, 't3', { model: 'claude-opus-5-5' })
   level = 'medium'
   cache = { read: 1200, written: 50 }
-  await $.prompt.submit({ text: 'And rename it', wait: false, origin: COMPOSER } as never)
+  await submit($, 'And rename it')
   await step($, 't4', { model: 'claude-opus-5-5' })
 
   expect(sent).toEqual(['low', 'medium', 'low', 'medium'])
-  expect((await $.command.run(run(''))).text).not.toContain('(fixed')
+  expect((await command($, '')).text).not.toContain('(fixed')
 })
 
 // The classifier picks `tier` for the model; the session runs `session`; the
@@ -387,10 +422,10 @@ function routed(on: On, tier: string, pick: 'Use' | 'Keep', session: () => strin
   picks(on, () => tier, 'choose the model')
   on('tool.call', ($, e, next) => {
     if (e.tool !== 'AskUserQuestion') return next(e)
-    const question = (e as never as { questions: { question: string; options: { label: string }[] }[] }).questions[0]
+    const question = firstQuestion(e)
     asked.push(question?.question ?? '')
     const label = question?.options.find(option => option.label.startsWith(pick))?.label ?? ''
-    return { result: { questions: [question], answers: { [question?.question ?? '']: label } } } as never
+    return { result: { questions: [question], answers: { [question?.question ?? '']: label } } }
   })
   return asked
 }
@@ -401,10 +436,10 @@ function footer(on: On): ($: Engine) => Promise<readonly string[]> {
   let modes: readonly string[] = []
   on('ui.render', { component: 'SessionMode' }, ($, e) => {
     modes = e.props.modes
-    return { type: 'Text', children: [] } as never
+    return { type: 'Text', children: [] }
   })
   return async $ => {
-    await $.ui.render({ surface: 'terminal', component: 'SessionMode', requestId: 'mode', props: { modes: ['focus'] } } as never)
+    await $.ui.render({ surface: 'terminal', component: 'SessionMode', requestId: 'mode', props: { modes: ['focus'] } })
     return modes
   }
 }
@@ -412,17 +447,17 @@ function footer(on: On): ($: Engine) => Promise<readonly string[]> {
 test('sends the session to the model the person approved, until they change it', { options: { modelForSession: true } }, async ($, on) => {
   on('prompt.submit', ($, e) => ({ text: e.text }))
   quiet(on)
-  listed(on)
+  listed(on, ALL)
   const asked = routed(on, 'sonnet', 'Use')
   const draw = footer(on)
   const models = requests(on, undefined, e => e.model)
 
-  await $.prompt.submit({ text: 'Add a test for the parser', wait: false, origin: COMPOSER } as never)
+  await submit($, 'Add a test for the parser')
   await step($, 't1', { model: 'claude-opus-5-5' })
   await step($, 't1', { model: 'claude-opus-5-5', agentId: 'sub' })
-  await $.prompt.submit({ text: 'Now run it', wait: false, origin: COMPOSER } as never)
+  await submit($, 'Now run it')
   await step($, 't2', { model: 'claude-opus-5-5' })
-  expect((await $.command.run(run(''))).text).toContain('Model: claude-sonnet-5-5')
+  expect((await command($, '')).text).toContain('Model: claude-sonnet-5-5')
   expect(await draw($)).toEqual(['focus', 'sonnet-5-5 (loadout)'])
   await step($, 't3', { model: 'claude-fable-5-1' })
   await step($, 't4', { model: 'claude-opus-5-5' })
@@ -436,35 +471,35 @@ test('sends the session to the model the person approved, until they change it',
 test('/model ends the model change at once', { options: { modelForSession: true } }, async ($, on) => {
   on('prompt.submit', ($, e) => ({ text: e.text }))
   quiet(on)
-  listed(on)
+  listed(on, ALL)
   let session = 'claude-opus-5-5'
   routed(on, 'haiku', 'Use', () => session)
   const draw = footer(on)
   on('command.run', { command: 'model' }, ($, e) => {
     session = 'claude-sonnet-5-5'
-    return { text: 'Set model to Sonnet 5.5' } as never
+    return { text: 'Set model to Sonnet 5.5' }
   })
 
-  await $.prompt.submit({ text: 'What is 2+2?', wait: false, origin: COMPOSER } as never)
+  await submit($, 'What is 2+2?')
   expect(await draw($)).toEqual(['focus', 'haiku-5-5 (loadout)'])
-  await $.command.run({ command: 'model', args: 'sonnet', origin: COMPOSER } as never)
+  await command($, 'sonnet', 'model')
 
   expect(await draw($)).toEqual(['focus'])
-  expect((await $.command.run(run(''))).text).not.toContain('Model:')
+  expect((await command($, '')).text).not.toContain('Model:')
 })
 
 test('/loadout off sends the next requests to the session model', { options: { modelForSession: true } }, async ($, on) => {
   on('prompt.submit', ($, e) => ({ text: e.text }))
   quiet(on)
-  listed(on)
+  listed(on, ALL)
   routed(on, 'haiku', 'Use')
   const models = requests(on, undefined, e => e.model)
 
-  await $.prompt.submit({ text: 'What is 2+2?', wait: false, origin: COMPOSER } as never)
+  await submit($, 'What is 2+2?')
   await step($, 't1', { model: 'claude-opus-5-5' })
-  await $.command.run(run('off'))
+  await command($, 'off')
   await step($, 't2', { model: 'claude-opus-5-5' })
-  await $.command.run(run('on'))
+  await command($, 'on')
   await step($, 't3', { model: 'claude-opus-5-5' })
 
   expect(models).toEqual(['claude-haiku-5-5', 'claude-opus-5-5', 'claude-opus-5-5'])
@@ -472,18 +507,18 @@ test('/loadout off sends the next requests to the session model', { options: { m
 
 test('answers /loadout under its plugin name too', async ($, on) => {
   quiet(on)
-  const { text } = await $.command.run({ command: 'loadout:loadout', args: 'off', origin: COMPOSER } as never)
+  const { text } = await command($, 'off', 'loadout:loadout')
   expect(text).toContain('loadout is off')
 })
 
 test('keeps the session model when the person says no, or the pick is not smaller', { options: { modelForSession: true } }, async ($, on) => {
   on('prompt.submit', ($, e) => ({ text: e.text }))
   quiet(on)
-  listed(on)
+  listed(on, ALL)
   const asked = routed(on, 'haiku', 'Keep', () => 'claude-sonnet-5-5')
   const models = requests(on, undefined, e => e.model)
 
-  await $.prompt.submit({ text: 'What does this function return?', wait: false, origin: COMPOSER } as never)
+  await submit($, 'What does this function return?')
   await step($, 't1', { model: 'claude-sonnet-5-5' })
 
   expect(asked.length).toBe(1)
@@ -493,10 +528,10 @@ test('keeps the session model when the person says no, or the pick is not smalle
 test('asks nothing when the picked model is not smaller than the session model', { options: { modelForSession: true } }, async ($, on) => {
   on('prompt.submit', ($, e) => ({ text: e.text }))
   quiet(on)
-  listed(on)
+  listed(on, ALL)
   const asked = routed(on, 'opus', 'Use', () => 'claude-sonnet-5-5')
 
-  await $.prompt.submit({ text: 'Redesign the storage layer', wait: false, origin: COMPOSER } as never)
+  await submit($, 'Redesign the storage layer')
 
   expect(asked).toEqual([])
 })
@@ -504,38 +539,38 @@ test('asks nothing when the picked model is not smaller than the session model',
 test('/loadout effort on and off switch the effort for this session', async ($, on) => {
   on('prompt.submit', ($, e) => ({ text: e.text }))
   quiet(on)
-  listed(on)
+  listed(on, ALL)
   const sent = requests(on)
   picks(on, () => 'low')
 
-  expect((await $.command.run(run(''))).text).toContain('Effort for each prompt: off, Model for the session: off')
-  expect((await $.command.run(run('effort on'))).text).toContain('is on')
-  await $.prompt.submit({ text: 'What does this function return?', wait: false, origin: COMPOSER } as never)
+  expect((await command($, '')).text).toContain('Effort for each prompt: off, Model for the session: off')
+  expect((await command($, 'effort on')).text).toContain('is on')
+  await submit($, 'What does this function return?')
   await step($, 't1')
-  await $.command.run(run('effort off'))
-  await $.prompt.submit({ text: 'And this one?', wait: false, origin: COMPOSER } as never)
+  await command($, 'effort off')
+  await submit($, 'And this one?')
   await step($, 't2')
 
   expect(sent).toEqual(['low', 'high'])
-  expect((await $.command.run(run(''))).text).not.toContain('Effort: low')
-  expect((await $.command.run(run('effort'))).text).toContain('Type "/loadout effort on"')
+  expect((await command($, '')).text).not.toContain('Effort: low')
+  expect((await command($, 'effort')).text).toContain('Type "/loadout effort on"')
 })
 
 test('/loadout model on before the first prompt, and off later', async ($, on) => {
   on('prompt.submit', ($, e) => ({ text: e.text }))
   quiet(on)
-  listed(on)
+  listed(on, ALL)
   const asked = routed(on, 'haiku', 'Use')
   const draw = footer(on)
   const models = requests(on, undefined, e => e.model)
 
-  await $.command.run(run('model on'))
-  await $.prompt.submit({ text: 'What is 2+2?', wait: false, origin: COMPOSER } as never)
+  await command($, 'model on')
+  await submit($, 'What is 2+2?')
   await step($, 't1', { model: 'claude-opus-5-5' })
-  expect((await $.command.run(run('model off'))).text).toContain('is off')
+  expect((await command($, 'model off')).text).toContain('is off')
   expect(await draw($)).toEqual(['focus'])
   await step($, 't2', { model: 'claude-opus-5-5' })
-  expect((await $.command.run(run('model on'))).text).toContain('first prompt only')
+  expect((await command($, 'model on')).text).toContain('first prompt only')
   await step($, 't3', { model: 'claude-opus-5-5' })
 
   expect(asked.length).toBe(1)
@@ -545,11 +580,11 @@ test('/loadout model on before the first prompt, and off later', async ($, on) =
 test('leaves the effort alone when effortPerPrompt is off', async ($, on) => {
   on('prompt.submit', ($, e) => ({ text: e.text }))
   quiet(on)
-  listed(on)
+  listed(on, ALL)
   const sent = requests(on)
   picks(on, () => 'low')
 
-  await $.prompt.submit({ text: 'What does this function return?', wait: false, origin: COMPOSER } as never)
+  await submit($, 'What does this function return?')
   await step($, 't1')
 
   expect(sent).toEqual(['high'])
@@ -572,12 +607,11 @@ test('hides no tool group when tool search is off', async ($, on) => {
     asked.push(String(e.prompt))
     return answer('claude_in_chrome')
   })
-  const composer = { kind: 'composer' } as const
 
-  await $.prompt.submit({ text: 'Check the login page in the browser', wait: false, origin: composer } as never)
-  const delta = await $.prompt.attachment({ type: 'mcp_instructions_delta', text: BLOCKS, origin: ENGINE } as never)
+  await submit($, 'Check the login page in the browser')
+  const delta = await attach($, 'mcp_instructions_delta', BLOCKS)
   expect(delta.text).toBe(BLOCKS)
-  await $.prompt.submit({ text: 'Now look at the error logs', wait: false, origin: composer } as never)
+  await submit($, 'Now look at the error logs')
 
   expect(asked.some(prompt => prompt.includes('tool groups'))).toBe(false)
   expect(seen[1]).toEqual([])
@@ -589,16 +623,34 @@ test('classifies from the tool list when the instructions come first', async ($,
   on('prompt.submit', ($, e) => ({ text: e.text }))
   on('prompt.attachment', ($, e) => ({ text: e.text }))
   quiet(on)
-  listed(on)
+  listed(on, ALL)
   on('model.complete', () => answer('claude_in_chrome'))
 
-  await $.prompt.submit({ text: 'Check the login page in the browser', wait: false } as never)
-  const delta = await $.prompt.attachment({ type: 'mcp_instructions_delta', text: BLOCKS, origin: ENGINE } as never)
+  await submit($, 'Check the login page in the browser')
+  const delta = await attach($, 'mcp_instructions_delta', BLOCKS)
   expect(delta.text).toContain('Chrome rules.')
   expect(delta.text).not.toContain('Datadog rules.')
 
-  const tools = await $.prompt.attachment({ type: 'deferred_tools_delta', text: TOOLS, origin: ENGINE } as never)
+  const tools = await attach($, 'deferred_tools_delta', TOOLS)
   expect(tools.text).not.toContain('mcp__datadog__search_logs')
+})
+
+// The engine can raise the MCP instructions and the tool listing together.
+// The decision that waits for the other one must reuse it, not classify again.
+test('two listings raised together classify the tool groups once, and agree', async ($, on) => {
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  on('prompt.attachment', ($, e) => ({ text: e.text }))
+  quiet(on)
+  listed(on, ALL)
+  const replies = ['claude_in_chrome', 'datadog\nslack']
+  on('model.complete', () => answer(replies.shift() ?? 'none'))
+
+  await submit($, 'Check the login page in the browser')
+  const [delta, tools] = await Promise.all([attach($, 'mcp_instructions_delta', BLOCKS), attach($, 'deferred_tools_delta', TOOLS)])
+  expect(replies).toHaveLength(1)
+  expect(delta.text).not.toContain('Datadog rules.')
+  expect(tools.text).not.toContain('mcp__datadog__search_logs')
+  expect(tools.text).toContain('mcp__claude-in-chrome__navigate')
 })
 
 // A server that connects late can raise its instructions before its tool
@@ -615,11 +667,11 @@ test('classifies a server that connects late from its instructions', async ($, o
     return answer('claude_in_chrome')
   })
 
-  await $.prompt.submit({ text: 'Check the login page in the browser', wait: false } as never)
-  await $.prompt.attachment({ type: 'mcp_instructions_delta', text: BLOCKS, origin: ENGINE } as never)
+  await submit($, 'Check the login page in the browser')
+  await attach($, 'mcp_instructions_delta', BLOCKS)
   tools.push({ name: 'mcp__slack__send_message', description: 'Send a message', mcp: true })
   const late = '## slack\nSlack rules.'
-  const delta = await $.prompt.attachment({ type: 'mcp_instructions_delta', text: late, origin: ENGINE } as never)
+  const delta = await attach($, 'mcp_instructions_delta', late)
 
   expect(delta.text).not.toContain('Slack rules.')
   expect(asked).toHaveLength(2)
@@ -636,8 +688,8 @@ test('keeps the tool listing when ToolSearch is denied', async ($, on) => {
   listed(on, LISTED)
   on('model.complete', () => answer('claude_in_chrome'))
 
-  await $.prompt.submit({ text: 'Check the login page in the browser', wait: false } as never)
-  const tools = await $.prompt.attachment({ type: 'deferred_tools_delta', text: TOOLS, origin: ENGINE } as never)
+  await submit($, 'Check the login page in the browser')
+  const tools = await attach($, 'deferred_tools_delta', TOOLS)
   expect(tools.text).toBe(TOOLS)
 })
 
@@ -648,9 +700,9 @@ test('/loadout says that no tool group is hidden when the session has no ToolSea
   listed(on, LISTED)
   on('model.complete', () => answer('local-tools:dep-scan'))
 
-  await $.prompt.submit({ text: 'Check the dependencies for a CVE', wait: false } as never)
-  await $.prompt.attachment({ type: 'skill_listing', text: SKILLS, origin: ENGINE } as never)
-  const out = await $.command.run(run(''))
+  await submit($, 'Check the dependencies for a CVE')
+  await attach($, 'skill_listing', SKILLS)
+  const out = await command($, '')
   expect(out.text).toContain('Tool groups hidden: none')
   expect(out.text).not.toContain('Tool groups kept: none')
 })
@@ -660,31 +712,31 @@ test('never hides an always-kept item, and the classifier does not see it', { op
   on('prompt.submit', ($, e) => ({ text: e.text }))
   on('prompt.attachment', ($, e) => ({ text: e.text }))
   quiet(on)
-  listed(on)
+  listed(on, ALL)
   const asked: string[] = []
   on('model.complete', ($, e) => {
     asked.push(String(e.prompt))
-    return { value: { isAnswered: true, text: 'none', usage: { inputTokens: 1, outputTokens: 1 } } } as never
+    return answer('none')
   })
 
-  await $.prompt.submit({ text: 'Rename this variable', wait: false } as never)
-  const tools = await $.prompt.attachment({ type: 'deferred_tools_delta', text: TOOLS, origin: ENGINE } as never)
+  await submit($, 'Rename this variable')
+  const tools = await attach($, 'deferred_tools_delta', TOOLS)
   expect(tools.text).toContain('mcp__slack__send_message')
   expect(tools.text).not.toContain('mcp__datadog__search_logs')
 
-  const skills = await $.prompt.attachment({ type: 'skill_listing', text: SKILLS, origin: ENGINE } as never)
+  const skills = await attach($, 'skill_listing', SKILLS)
   expect(skills.text).toContain('local-tools:dep-scan')
   expect(skills.text).toContain('update-config')
   expect(skills.text).not.toContain('riff:title')
 
   expect(asked.join('\n')).not.toContain('slack (')
   expect(asked.join('\n')).not.toContain('dep-scan')
-  expect((await $.command.run(run(''))).text).toContain('Always kept: slack, local-tools:dep-scan, update-config')
+  expect((await command($, '')).text).toContain('Always kept: slack, local-tools:dep-scan, update-config')
 })
 
 test('/loadout keep and unkeep save the marks, and leave the option as it is', { options: { alwaysKeep: 'base' } }, async ($, on) => {
   const store = fakeStore(on, { alwaysKeep: ['retro'] })
-  const say = async (args: string) => (await $.command.run(run(args))).text
+  const say = async (args: string) => (await command($, args)).text
 
   expect(await say('keep kb-search')).toContain('Always keep: base, retro, kb-search.')
   expect(await say('keep kb-search')).toContain('already')
@@ -701,14 +753,14 @@ test('/loadout list shows every item with its mark and its state', { options: { 
   on('prompt.submit', ($, e) => ({ text: e.text }))
   on('prompt.attachment', ($, e) => ({ text: e.text }))
   quiet(on)
-  listed(on)
-  on('model.complete', () => ({ value: { isAnswered: true, text: 'datadog', usage: { inputTokens: 1, outputTokens: 1 } } }) as never)
+  listed(on, ALL)
+  on('model.complete', () => answer('datadog'))
 
-  await $.prompt.submit({ text: 'Look at the error logs', wait: false } as never)
-  await $.prompt.attachment({ type: 'deferred_tools_delta', text: TOOLS, origin: ENGINE } as never)
-  await $.prompt.attachment({ type: 'skill_listing', text: SKILLS, origin: ENGINE } as never)
+  await submit($, 'Look at the error logs')
+  await attach($, 'deferred_tools_delta', TOOLS)
+  await attach($, 'skill_listing', SKILLS)
 
-  const text = (await $.command.run(run('list'))).text
+  const text = (await command($, 'list')).text
   expect(text).toContain('[ ] datadog  (kept)')
   expect(text).toContain('[ ] slack  (hidden)')
   expect(text).toContain('[x] riff:title  (kept)')
@@ -717,9 +769,9 @@ test('/loadout list shows every item with its mark and its state', { options: { 
 test('the picker lists the skills and flips a mark on a press', async ($, on) => {
   on('prompt.attachment', ($, e) => ({ text: e.text }))
   quiet(on)
-  listed(on)
+  listed(on, ALL)
   const store = fakeStore(on, { alwaysKeep: ['riff'] })
-  await $.prompt.attachment({ type: 'skill_listing', text: SKILLS, origin: ENGINE } as never)
+  await attach($, 'skill_listing', SKILLS)
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount(pane(surface))
@@ -743,24 +795,23 @@ test('the picker lists the skills and flips a mark on a press', async ($, on) =>
 
 test('the picker names each server as /mcp does, with its size, and each skill with its description', async ($, on) => {
   quiet(on)
-  listed(on)
+  listed(on, ALL)
   fakeStore(on)
   // The engine names a claude.ai connector in the tool-name spelling.
   const tool = (name: string, tokens: number) => ({ name, serverName: 'claude_ai_Datadog', tokens, isLoaded: false })
-  on('session.usage', () => ({
-    value: {
-      startedAt: 0,
-      rateLimits: [],
-      context: {
-        window: 200_000,
-        breakdown: {
-          mcpTools: [tool('mcp__datadog__search_logs', 900), tool('mcp__datadog__get_trace', 600)],
-          skills: { totalSkills: 1, includedSkills: 1, tokens: 40, skillFrontmatter: [{ name: 'update-config', source: 'built-in', tokens: 40 }] },
-        },
-      },
+  const usage: SessionUsage = {
+    startedAt: 0,
+    rateLimits: [],
+    context: {
+      window: 200_000,
+      breakdown: breakdown({
+        mcpTools: [tool('mcp__datadog__search_logs', 900), tool('mcp__datadog__get_trace', 600)],
+        skills: { totalSkills: 1, includedSkills: 1, tokens: 40, skillFrontmatter: [{ name: 'update-config', source: 'built-in', tokens: 40 }] },
+      }),
     },
-  }) as never)
-  on('command.list', () => ({ value: [{ name: 'update-config', description: 'Configure the harness', source: 'builtin' }] }) as never)
+  }
+  on('session.usage', () => ({ value: usage }))
+  on('command.list', () => ({ value: [{ name: 'update-config', description: 'Configure the harness', source: 'builtin' }] }))
 
   const ui = await $.ui.mount(pane('terminal'))
   await ui.input({ key: 'filter', text: '', kind: 'change' })
@@ -786,15 +837,15 @@ test('the picker says when a connector is not logged in', async ($, on) => {
 
 test('the picker reads the facts once when it opens, not on each key of the filter', async ($, on) => {
   quiet(on)
-  listed(on)
+  listed(on, ALL)
   fakeStore(on)
   let reads = 0
   on('session.usage', () => {
     reads++
-    return { value: { startedAt: 0, rateLimits: [], context: { window: 200_000 } } } as never
+    return { value: { startedAt: 0, rateLimits: [], context: { window: 200_000 } } }
   })
-  on('ui.open', () => ({ value: { isPlaced: true } }) as never)
-  await $.command.run(run('pick'))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  await command($, 'pick')
   const ui = await $.ui.mount(pane('terminal'))
   for (const text of ['d', 'da', 'dat']) await ui.input({ key: 'filter', text, kind: 'change' })
   expect(JSON.stringify(await ui.drawn())).toContain('datadog')
@@ -803,11 +854,11 @@ test('the picker reads the facts once when it opens, not on each key of the filt
 
 test('a mark keeps the marks that another session saved after the picker opened', async ($, on) => {
   quiet(on)
-  listed(on)
+  listed(on, ALL)
   const store = fakeStore(on, { alwaysKeep: ['riff'] })
-  on('ui.open', () => ({ value: { isPlaced: true } }) as never)
-  await $.command.run(run('pick'))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  await command($, 'pick')
   store.alwaysKeep = ['riff', 'slack']
-  await $.command.run(run('keep datadog'))
+  await command($, 'keep datadog')
   expect(store.alwaysKeep).toEqual(['riff', 'slack', 'datadog'])
 })
