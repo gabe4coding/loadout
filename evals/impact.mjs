@@ -89,7 +89,7 @@ if (flags.report) {
 
 const arms = flags.arms.split(',')
 for (const arm of arms) if (!(arm in ARMS)) die(`unknown arm: ${arm}\n${USAGE}`)
-const tasks = flags.tasks ? flags.tasks.split(',').map(id => TASKS.find(t => t.id === id) ?? die(`unknown task: ${id}`)) : TASKS
+const tasks = flags.tasks ? flags.tasks.split(',').map(id => TASKS.find(one => one.id === id) ?? die(`unknown task: ${id}`)) : TASKS
 if (!['fixed', 'real'].includes(flags.env)) die(`--env must be fixed or real\n${USAGE}`)
 const runs = Number(flags.runs)
 const jobs = Number(flags.jobs)
@@ -112,7 +112,7 @@ const meta = {
   env: flags.env,
   runs,
   arms,
-  tasks: tasks.map(t => t.id),
+  tasks: tasks.map(one => one.id),
 }
 fs.writeFileSync(path.join(out, 'meta.json'), JSON.stringify(meta, null, 2))
 console.log(`results: ${out}`)
@@ -318,7 +318,7 @@ function writeReport(dir, meta, records) {
       if (rs.length === 0) return 'n/a'
       return `${rs.filter(r => r.failed.length === 0).length}/${rs.length} · $${mean(rs.map(r => r.totalUsd)).toFixed(4)} · ${(mean(rs.map(r => r.wallMs)) / 1000).toFixed(0)}s`
     })
-    lines.push(`| ${task} | ${TASKS.find(t => t.id === task)?.about ?? ''} | ${cells.join(' | ')} |`)
+    lines.push(`| ${task} | ${TASKS.find(one => one.id === task)?.about ?? ''} | ${cells.join(' | ')} |`)
   }
 
   const switches = records.filter(r => r.efforts.length > 0 || r.route)

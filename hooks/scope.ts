@@ -1,13 +1,16 @@
-// Pure text work: parse the listings the engine injects, group their entries,
-// and rebuild them with only the groups the classifier kept.
+// Pure helpers, with no `$`: parse the listings the engine injects, group their
+// entries and rebuild them with only the groups the classifier kept, and read
+// the words, options and decisions that register uses.
 
-import type { Effort, ModelTier, ServerFact, SkillFact } from '../types'
+import type { Decision, Effort, Kind, ModelTier, Options, ServerFact, SkillFact, Status } from '../types'
 
 // A deferred tool line is one bare name; an MCP tool is mcp__<server>__<tool>.
 const TOOL_LINE = /^[A-Za-z0-9_.:-]+$/
 const SKILL_LINE = /^- ([^\s:]+(?::[^\s:]+)?)(?::\s|$)/
 
 export const CORE = 'core'
+
+export const KINDS: readonly Kind[] = ['tools', 'skills']
 
 export function toolGroup(name: string): string {
   const parts = splitMcpName(name)
@@ -67,7 +70,7 @@ export function parseSkills(text: string): Listing {
 // offered: they are few and cheap.
 export type Row = { group: string; row: string }
 
-export function toolCatalog(listing: Listing): Row[] {
+function toolCatalog(listing: Listing): Row[] {
   const byGroup = new Map<string, string[]>()
   for (const entry of listing.entries) {
     if (entry.group === CORE) continue
@@ -80,16 +83,21 @@ export function toolCatalog(listing: Listing): Row[] {
   }))
 }
 
-export function skillCatalog(listing: Listing): Row[] {
+function skillCatalog(listing: Listing): Row[] {
   return listing.entries.map(entry => ({
     group: entry.group,
     row: entry.lines.join(' ').slice(2, 160).replace(/\s+/g, ' '),
   }))
 }
 
-export function groupsOf(listing: Listing, kind: 'tools' | 'skills'): string[] {
+export const CATALOG: Record<Kind, (listing: Listing) => Row[]> = { tools: toolCatalog, skills: skillCatalog }
+
+// The groups that a listing of each kind always shows: the `core` tools.
+const ALWAYS_SHOWN: Record<Kind, readonly string[]> = { tools: [CORE], skills: [] }
+
+export function groupsOf(listing: Listing, kind: Kind): string[] {
   const groups = new Set(listing.entries.map(entry => entry.group))
-  if (kind === 'tools') groups.delete(CORE)
+  for (const group of ALWAYS_SHOWN[kind]) groups.delete(group)
   return [...groups]
 }
 
@@ -168,11 +176,27 @@ export function listedSkillFacts(facts: readonly SkillFact[], listed: readonly s
 // The groups of `listing` that no decision covers yet.
 export function unseenGroups(
   listing: Listing,
-  kind: 'tools' | 'skills',
-  before: { kept: readonly string[]; hidden: readonly string[] } | null,
+  kind: Kind,
+  before: Decision | null,
 ): string[] {
-  const seen = new Set([...(before?.kept ?? []), ...(before?.hidden ?? [])])
-  return groupsOf(listing, kind).filter(group => !seen.has(group))
+  return groupsOf(listing, kind).filter(group => statusOf(before, group) === undefined)
+}
+
+// The status of a group, or undefined when the decision has none. Only its own
+// keys count: a group named `constructor` is not a status of every decision.
+export function statusOf(decision: Decision | null, group: string): Status | undefined {
+  return decision !== null && Object.hasOwn(decision, group) ? decision[group] : undefined
+}
+
+// The groups of a decision with one of `statuses`, in the order seen. An
+// object lists a name that is a number first, which only changes the order.
+export function groupsWith(decision: Decision | null, ...statuses: Status[]): string[] {
+  return Object.entries(decision ?? {}).filter(([, status]) => statuses.includes(status)).map(([group]) => group)
+}
+
+// The groups a decision keeps: by the classifier or by the alwaysKeep option.
+export function keptGroups(decision: Decision | null): string[] {
+  return groupsWith(decision, 'kept', 'always')
 }
 
 // Reads the alwaysKeep option: names split on commas or white space, once each.
@@ -186,14 +210,18 @@ export function parseKeep(text: string): string[] {
 // without the plugin (`recall` covers `retro:recall`): the context breakdown
 // and people often leave the plugin out. A name that covers too much keeps
 // more, which costs less than a wrong cut.
-export function isAlwaysKept(group: string, kind: 'tools' | 'skills', names: readonly string[]): boolean {
-  if (kind === 'tools') return names.some(name => normalize(name) === group)
-  return names.some(name => group === name || group.startsWith(`${name}:`) || (!name.includes(':') && group.endsWith(`:${name}`)))
+export function isAlwaysKept(group: string, kind: Kind, names: readonly string[]): boolean {
+  return names.some(name => COVERS[kind](name, group))
+}
+
+const COVERS: Record<Kind, (name: string, group: string) => boolean> = {
+  tools: (name, group) => normalize(name) === group,
+  skills: (name, group) => group === name || group.startsWith(`${name}:`) || (!name.includes(':') && group.endsWith(`:${name}`)),
 }
 
 // The alwaysKeep names after a mark on a group is set or cleared. Clearing
 // removes each name that covers the group, so the group is not kept after.
-export function flipKeep(names: readonly string[], group: string, kind: 'tools' | 'skills', isOn: boolean): string[] {
+export function flipKeep(names: readonly string[], group: string, kind: Kind, isOn: boolean): string[] {
   if (!isOn) return names.filter(name => !isAlwaysKept(group, kind, [name]))
   return isAlwaysKept(group, kind, names) ? [...names] : [...names, group]
 }
@@ -213,15 +241,44 @@ export function isNewTask(reply: string): boolean {
   return /^[-*\s`"]*new task[`"\s.:]*$/i.test(first)
 }
 
-const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
-// From the smallest model to the largest.
-const MODEL_ID: Record<ModelTier, string> = {
+// From the lowest to the highest. The EFFORT prompt names them from this list.
+export const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
+// From the smallest model to the largest. The MODEL prompt names them from
+// this list, and each takes the effort in a message (a test checks it).
+export const MODEL_ID: Record<ModelTier, string> = {
   haiku: 'claude-haiku-5-5',
   sonnet: 'claude-sonnet-5-5',
   opus: 'claude-opus-5-5',
   fable: 'claude-fable-5-1',
 }
-const MODELS = Object.keys(MODEL_ID) as ModelTier[]
+export const MODELS = Object.keys(MODEL_ID) as ModelTier[]
+
+// "a, b or c", for the prompts that list the words of a reply.
+export function wordList(words: readonly string[]): string {
+  return words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} or ${words[words.length - 1]}`
+}
+
+export function isEffort(value: unknown): value is Effort {
+  return EFFORTS.includes(value as Effort)
+}
+
+// The words of /loadout after the name, each as the command description shows
+// it. Each has a case in the command.run hook of register.
+export const COMMANDS = {
+  list: 'list',
+  pick: 'pick',
+  keep: 'keep <name>',
+  unkeep: 'unkeep <name>',
+  off: 'off',
+  on: 'on',
+  effort: 'effort on|off',
+  model: 'model on|off',
+} as const
+export type CommandWord = keyof typeof COMMANDS
+
+export function isCommandWord(word: string): word is CommandWord {
+  return Object.hasOwn(COMMANDS, word)
+}
 
 const wordOf = (words: readonly string[]) => new RegExp(`(?<![a-z])(${words.join('|')})(?![a-z])`, 'gi')
 const EFFORT_WORD = wordOf(EFFORTS)
@@ -252,10 +309,9 @@ export function routeModel(picked: ModelTier, session: string): string | null {
 
 // The lower of two levels: the plugin may lower the session's effort, never
 // raise it. Null when the session's effort is not a level (a number).
-export function capEffort(picked: Effort, session: string | number): Effort | null {
-  const ceiling = EFFORTS.indexOf(session as Effort)
-  if (ceiling === -1) return null
-  return EFFORTS[Math.min(EFFORTS.indexOf(picked), ceiling)] ?? null
+export function capEffort(picked: Effort, session: Effort | number): Effort | null {
+  if (!isEffort(session)) return null
+  return EFFORTS[Math.min(EFFORTS.indexOf(picked), EFFORTS.indexOf(session))] ?? null
 }
 
 // The models that take the effort in a message (per-turn control), so a change
@@ -267,26 +323,26 @@ export function takesTurnEffort(model: string): boolean {
 export function rebuild(
   listing: Listing,
   kept: readonly string[],
-  kind: 'tools' | 'skills',
+  kind: Kind,
 ): { text: string; hidden: string[] } {
-  const keep = new Set(kept)
-  if (kind === 'tools') keep.add(CORE)
+  const keep = new Set([...kept, ...ALWAYS_SHOWN[kind]])
   const shown = listing.entries.filter(entry => keep.has(entry.group))
   const dropped = listing.entries.filter(entry => !keep.has(entry.group))
   const lines = [...listing.head, ...shown.flatMap(entry => entry.lines)]
-  if (dropped.length > 0) lines.push(note(dropped, kind))
+  if (dropped.length > 0) lines.push(NOTE[kind](dropped))
   lines.push(...listing.tail)
   return { text: lines.join('\n'), hidden: dropped.map(entry => entry.name) }
 }
 
-function note(dropped: Entry[], kind: 'tools' | 'skills'): string {
-  if (kind === 'skills') {
-    return `(loadout hid ${dropped.length} more skills that look unrelated to this task. They still work: find one with SearchSkills or ListSkills, or call Skill with its name.)`
-  }
-  const counts = new Map<string, number>()
-  for (const entry of dropped) counts.set(entry.group, (counts.get(entry.group) ?? 0) + 1)
-  const groups = [...counts].map(([group, n]) => `${group} (${n})`).join(', ')
-  return `(loadout hid ${dropped.length} more deferred tools that look unrelated to this task, from: ${groups}. They still work: ToolSearch finds them by keyword.)`
+const NOTE: Record<Kind, (dropped: Entry[]) => string> = {
+  skills: dropped =>
+    `(loadout hid ${dropped.length} more skills that look unrelated to this task. They still work: find one with SearchSkills or ListSkills, or call Skill with its name.)`,
+  tools: dropped => {
+    const counts = new Map<string, number>()
+    for (const entry of dropped) counts.set(entry.group, (counts.get(entry.group) ?? 0) + 1)
+    const groups = [...counts].map(([group, n]) => `${group} (${n})`).join(', ')
+    return `(loadout hid ${dropped.length} more deferred tools that look unrelated to this task, from: ${groups}. They still work: ToolSearch finds them by keyword.)`
+  },
 }
 
 // Drops the "## <server>" blocks of the MCP instructions for the hidden
@@ -311,3 +367,25 @@ export function removedServers(before: string, after: string): string[] {
   const kept = new Set(headers(after))
   return headers(before).filter(header => !kept.has(header))
 }
+
+// The options when the settings leave one out or give it with another type.
+// The same as the defaults of .claude-plugin/plugin.json: a test checks it.
+export const OPTION_DEFAULTS: Readonly<Options> = {
+  alwaysKeep: '',
+  newTaskNote: true,
+  effortPerPrompt: false,
+  modelForSession: false,
+  traceFile: '',
+}
+
+// The options of the plugin, each with the type of its default.
+export function readOptions(raw: Readonly<Record<string, unknown>>): Options {
+  const options: Record<string, unknown> = { ...OPTION_DEFAULTS }
+  for (const [key, fallback] of Object.entries(OPTION_DEFAULTS)) {
+    if (typeof raw[key] === typeof fallback) options[key] = raw[key]
+  }
+  return options as Options
+}
+
+// How much of a prompt of the person the plugin keeps and sends to the classifier.
+export const PROMPT_CHARS = 4000

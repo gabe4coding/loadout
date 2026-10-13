@@ -1,9 +1,18 @@
 import { expect, test } from 'claude-code/testing'
 
 import {
+  EFFORTS,
+  MODEL_ID,
+  MODELS,
+  OPTION_DEFAULTS,
   capEffort,
   flipKeep,
+  groupsWith,
   isAlwaysKept,
+  isEffort,
+  keptGroups,
+  readOptions,
+  wordList,
   isLoginOnly,
   isNewTask,
   listedSkillFacts,
@@ -19,6 +28,7 @@ import {
   serverLabel,
   skillDetail,
   splitMcpName,
+  statusOf,
   takesTurnEffort,
   trimMcpInstructions,
   unseenGroups,
@@ -91,8 +101,23 @@ test('groups only the MCP tools of the tool list, and finds the groups no decisi
     { name: 'mcp__slack__send_message', mcp: true },
   ])
   expect(listing.entries.map(entry => entry.group)).toEqual(['datadog', 'slack'])
-  expect(unseenGroups(listing, 'tools', { kept: ['datadog'], hidden: [] })).toEqual(['slack'])
+  expect(unseenGroups(listing, 'tools', { datadog: 'kept' })).toEqual(['slack'])
+  expect(unseenGroups(listing, 'tools', { slack: 'hidden', datadog: 'always' })).toEqual([])
   expect(unseenGroups(listing, 'tools', null)).toEqual(['datadog', 'slack'])
+})
+
+test('a group with the name of an object key is unseen until a decision has it', () => {
+  const listing = parseSkills('Skills:\n- constructor: Build things\n- toString: Print things')
+  expect(unseenGroups(listing, 'skills', {})).toEqual(['constructor', 'toString'])
+  expect(statusOf({}, 'constructor')).toBeUndefined()
+  expect(statusOf(JSON.parse('{"__proto__":"hidden"}'), '__proto__')).toBe('hidden')
+})
+
+test('lists the groups of a decision by status, in the order seen', () => {
+  const decision = { slack: 'hidden', datadog: 'always', github: 'kept', jira: 'hidden' } as const
+  expect(keptGroups(decision)).toEqual(['datadog', 'github'])
+  expect(groupsWith(decision, 'hidden')).toEqual(['slack', 'jira'])
+  expect(groupsWith(null, 'hidden')).toEqual([])
 })
 
 test('names a claude.ai connector as the connector list does, and leaves other servers as they are', () => {
@@ -154,6 +179,26 @@ test('reads one effort level from a reply, and caps it at the session level', ()
   expect(capEffort('max', 'medium')).toBe('medium')
   expect(capEffort('low', 'high')).toBe('low')
   expect(capEffort('low', 5000)).toBe(null)
+})
+
+test('names each model and effort of a classifier reply in the prompt word list', () => {
+  expect(wordList(EFFORTS)).toBe('low, medium, high, xhigh or max')
+  expect(wordList(MODELS)).toBe('haiku, sonnet, opus or fable')
+  expect(isEffort('xhigh')).toBe(true)
+  expect(isEffort(3)).toBe(false)
+})
+
+test('every model the plugin routes to takes the effort in a message', () => {
+  for (const id of Object.values(MODEL_ID)) expect(takesTurnEffort(id)).toBe(true)
+})
+
+test('reads each option with the type of its default, else the default', () => {
+  expect(readOptions({})).toEqual(OPTION_DEFAULTS)
+  expect(readOptions({ newTaskNote: 'no', effortPerPrompt: true, alwaysKeep: 'retro', traceFile: 3 })).toEqual({
+    ...OPTION_DEFAULTS,
+    effortPerPrompt: true,
+    alwaysKeep: 'retro',
+  })
 })
 
 test('changes the effort only on models that take it in a message', () => {
