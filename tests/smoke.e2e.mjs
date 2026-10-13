@@ -1,3 +1,4 @@
+// @ts-check
 // End-to-end smoke test: real headless Claude Code, this plugin and two fake
 // MCP servers. The hooks tests fake Claude Code and the classifier. This test
 // runs them all together: one session with two prompts, and one session with
@@ -18,6 +19,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { runSession, tool, TRACKER, WEATHER } from './session.mjs'
 
+/** @type {(name: string, fallback: string) => string | undefined} */
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(name)
   return i > 0 ? process.argv[i + 1] : fallback
@@ -51,8 +53,9 @@ const [{ dir: out, exit, results, trace, calls: served }, off] = await Promise.a
     toolSearch: false,
   }),
 ])
-const toolListings = trace.filter(t => t.event === 'listing' && t.type === 'deferred_tools_delta')
+const toolListings = trace.filter(t => t.event === 'listing').filter(t => t.type === 'deferred_tools_delta')
 const scoped = toolListings.find(t => t.isScoped)
+/** @type {(value: unknown) => string} */
 const shown = value => JSON.stringify(value)
 
 const cases = {
@@ -66,7 +69,7 @@ const cases = {
   // before Claude Code builds the first tool listing?
   'the plugin changes the first tool listing': () => {
     assert.ok(toolListings.length > 0, `no tool listing in the trace (is ToolSearch on?): ${shown(trace)}`)
-    assert.equal(toolListings[0].isScoped, true, `Claude Code built the first tool listing before the first prompt reached the plugin: ${shown(toolListings)}`)
+    assert.equal(toolListings[0]?.isScoped, true, `Claude Code built the first tool listing before the first prompt reached the plugin: ${shown(toolListings)}`)
   },
 
   'the classifier keeps the tracker and hides the weather tools': () => {
@@ -97,7 +100,7 @@ const cases = {
 
   'with tool search off, all instruction blocks stay': () => {
     assert.equal(off.exit, 0, `exit ${off.exit}, see ${off.dir}/stderr.txt`)
-    assert.ok(!off.trace.some(t => t.type === 'deferred_tools_delta'), `a tool listing with tool search off: ${shown(off.trace)}`)
+    assert.ok(!off.trace.some(t => t.event === 'listing' && t.type === 'deferred_tools_delta'), `a tool listing with tool search off: ${shown(off.trace)}`)
     const events = off.trace.filter(t => t.event === 'mcp_instructions')
     assert.ok(events.length > 0, `no mcp_instructions in the trace: ${shown(off.trace)}`)
     for (const t of events) assert.deepEqual(t.removed, [], `mcp_instructions: ${shown(events)}`)
@@ -111,7 +114,7 @@ for (const [name, fn] of Object.entries(cases)) {
     console.log(`pass  ${name}`)
   } catch (err) {
     failed++
-    console.log(`FAIL  ${name}\n      ${err.message.split('\n').join('\n      ')}`)
+    console.log(`FAIL  ${name}\n      ${String(err instanceof Error ? err.message : err).split('\n').join('\n      ')}`)
   }
 }
 

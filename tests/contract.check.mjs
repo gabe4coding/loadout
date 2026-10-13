@@ -12,8 +12,6 @@
 // - No module-level `let`, or `const` Set, Map or array, in hooks/ outside
 //   the allowed ones, exported or not.
 // - No two-way branch on a kind (`kind === 'tools'`): use a Record<Kind, ...>.
-// - Each trace event and field that a reader reads is in TraceLine. In a
-//   reader, the name `t` holds a trace line and nothing else.
 //
 //   node tests/contract.check.mjs
 
@@ -28,13 +26,11 @@ const filesIn = (dir, pattern) =>
   fs.readdirSync(path.join(ROOT, dir)).filter(f => pattern.test(f)).sort().map(f => `${dir}/${f}`)
 
 const MANIFEST = '.claude-plugin/plugin.json'
-const STATE_TYPES = 'types/index.d.ts'
 const REGISTER = 'hooks/register.tsx'
 const COMMAND_DOC = 'commands/loadout.md'
 const HOOKS = filesIn('hooks', /\.tsx?$/)
 const TESTS = filesIn('tests', /\.tsx?$/)
 const TYPED = [...HOOKS, ...TESTS]
-const TRACE_READERS = ['tests/smoke.e2e.mjs', 'evals/impact.mjs']
 // The module-level state that each hooks file may have. register: the
 // per-session state, and the queue of the trace file, which all sessions share.
 const ALLOWED_STATE = { [REGISTER]: ['local', 'traceQueue'] }
@@ -107,28 +103,6 @@ function kindBranchProblems(file, text) {
   )
 }
 
-// The events and the field names of the TraceLine union.
-function traceContract(types) {
-  const start = types.indexOf('export type TraceLine =')
-  const block = types.slice(start, types.indexOf('\n\n', start))
-  return {
-    events: new Set([...block.matchAll(/event: '(\w+)'/g)].map(m => m[1])),
-    fields: new Set([...block.matchAll(/(\w+): /g)].map(m => m[1])),
-  }
-}
-
-function traceReadProblems(file, text, contract) {
-  const where = 'Add it to TraceLine in types/index.d.ts and write it in hooks/register.tsx, or read a name that is there'
-  return [
-    ...[...text.matchAll(/\bt\.event === '(\w+)'/g)].filter(m => !contract.events.has(m[1])).map(
-      m => `${file}:${lineOf(text, m.index)}: reads trace event "${m[1]}", which TraceLine does not have. ${where}. Why: the reader then gets no line, and a check or a measure is silently wrong.`,
-    ),
-    ...[...text.matchAll(/\bt\.(\w+)/g)].filter(m => !contract.fields.has(m[1])).map(
-      m => `${file}:${lineOf(text, m.index)}: reads trace field "${m[1]}", which TraceLine does not have. ${where}. Why: the reader then gets undefined, and a check or a measure is silently wrong.`,
-    ),
-  ]
-}
-
 const all = (files, scan) => files.flatMap(file => scan(file, read(file)))
 
 const tests = {
@@ -141,10 +115,9 @@ const tests = {
       ...optionReadProblems('x.ts', "export const register: Register = (on, options) => {\n  const file = typeof options.traceFile === 'string'"),
       ...commandDocProblems('---\ndescription: Show the loadout of this session. Also: list\nargument-hint: "[list]"\n---', { list: 'list', keep: 'keep <name>' }),
       ...kindBranchProblems('x.ts', "const rows = kind === 'tools' ? a : b\nif ('skills' !== item.kind) {}"),
-      ...traceReadProblems('x.mjs', "trace.filter(t => t.event === 'recal').flatMap(t => t.names)", traceContract(read(STATE_TYPES))),
       ...optionProblems({ userConfig: { a: { type: 'boolean', default: true } } }, { a: false, b: '' }),
     ].join('\n')
-    for (const message of ['"as never"', '"as unknown as"', '"as SubmitInput"', 'tests/kit.ts', 'let picking', 'const front', 'let traceQueue', 'readOptions(options)', 'description is', 'argument-hint is', `"kind === 'tools'"`, `"'skills' !== item.kind"`, 'event "recal"', 'field "names"', 'option "a"', 'option "b"']) {
+    for (const message of ['"as never"', '"as unknown as"', '"as SubmitInput"', 'tests/kit.ts', 'let picking', 'const front', 'let traceQueue', 'readOptions(options)', 'description is', 'argument-hint is', `"kind === 'tools'"`, `"'skills' !== item.kind"`, 'option "a"', 'option "b"']) {
       assert.ok(bad.includes(message), `no message with ${message} in:\n${bad}`)
     }
     assert.ok(!bad.includes('let local'))
@@ -155,7 +128,6 @@ const tests = {
       ...optionReadProblems('x.ts', 'export const register: Register = (on, raw) => {\n  // the raw options\n  const { traceFile } = readOptions(raw)'),
       ...commandDocProblems('---\ndescription: Show the loadout of this session. Also: list, keep <name>\nargument-hint: "[list|keep]"\n---', { list: 'list', keep: 'keep <name>' }),
       ...kindBranchProblems('x.ts', "const rows = CATALOG[kind](listing)\nfunction f(kind: Kind) {}"),
-      ...traceReadProblems('x.mjs', "trace.filter(t => t.event === 'recall').flatMap(t => t.named)", traceContract(read(STATE_TYPES))),
       ...optionProblems({ userConfig: { a: { type: 'boolean', default: true } } }, { a: true }),
     ]
     assert.deepEqual(good, [])
@@ -180,11 +152,6 @@ const tests = {
   },
   'no two-way branch on a kind': () => {
     const problems = all(TYPED, kindBranchProblems)
-    assert.deepEqual(problems, [], problems.join('\n'))
-  },
-  'every trace event and field that a reader reads is in TraceLine': () => {
-    const contract = traceContract(read(STATE_TYPES))
-    const problems = TRACE_READERS.flatMap(file => traceReadProblems(file, read(file), contract))
     assert.deepEqual(problems, [], problems.join('\n'))
   },
 }

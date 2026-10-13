@@ -1,0 +1,15 @@
+{
+  // The .mjs scripts that start with `// @ts-check`: the readers of the trace,
+  // so a read of an event or a field that TraceLine does not have fails. Apart
+  // from tsconfig.json, so the Node globals do not reach the hooks: the engine
+  // runs them without Node.
+  "extends": "./.claude-plugin/types/tsconfig.json",
+  "compilerOptions": {
+    // node: from `npm install`.
+    "types": ["claude-code", "node"],
+    "typeRoots": [".claude-plugin/types", "node_modules/@types"],
+    "noEmit": true,
+    "allowJs": true
+  },
+  "include": ["types", "tests/*.mjs", "evals/*.mjs"]
+}
