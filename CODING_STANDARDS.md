@@ -35,7 +35,7 @@ enforces; the others rely on discipline.
   `[test: smoke.e2e.mjs]`
 - Write one trace line for each decision that a smoke check reads. A trace line holds names and counts, never
   prompt text. Each line is a member of `TraceLine` in `types/index.d.ts`, and its readers read only its fields.
-  `[test: tsc, contract.check.mjs]`
+  A reader starts with `// @ts-check`, and `tests/session.mjs` gives the trace its type. `[test: tsc]`
 
 ## Tests and commits
 - Before every commit, do the verification loop in this order. If a step changes code, start again at step 1.
@@ -53,9 +53,11 @@ enforces; the others rely on discipline.
   - `claude plugin test .`: the hooks against a fake host (`tests/*.test.ts`). Mock `model.complete` there: the
     test kit has no model.
   - `node tests/docs.check.mjs`: the doc rules below.
-  - `npx -p typescript@7.0.2 tsc -p tsconfig.json`: the types of the hooks and the tests, against the engine API in
-    `.claude-plugin/types/`. Claude Code writes it when the plugin loads with `--plugin-dir`. CI has no login, so it
-    cannot run this check: run it before every commit.
+  - `npx -p typescript@7.0.2 tsc -p tsconfig.json` and `npx -p typescript@7.0.2 tsc -p tsconfig.scripts.json`: the
+    types of the hooks and the tests, then of the `.mjs` files with `// @ts-check`, against the engine API in
+    `.claude-plugin/types/`. Claude Code writes it when the plugin loads with `--plugin-dir`. The second config has
+    the Node types (run `npm install` one time first), the first does not: the engine runs the hooks without Node.
+    CI has no login, so it cannot run this check: run it before every commit.
   - `node tests/contract.check.mjs`: the contracts that the types cannot see, marked `[test: contract.check.mjs]`.
 - `node tests/smoke.e2e.mjs`: real `claude -p` with the plugin and two fake MCP servers, two prompts in one
   session, and one session with tool search off. It needs a login and costs API usage, so it is not one of the five checks and CI does not run it. Run

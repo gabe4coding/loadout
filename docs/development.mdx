@@ -45,7 +45,7 @@ node .claude/skills/verify/drive.mjs run 'List the open issues of project OPS.' 
 
 ## Checks
 
-Run all five checks before each commit:
+Run all five checks before each commit. The type check has two commands:
 
 ```bash
 claude plugin validate .
@@ -64,13 +64,18 @@ npx -p typescript@7.0.2 tsc -p tsconfig.json
 ```
 
 ```bash
+npx -p typescript@7.0.2 tsc -p tsconfig.scripts.json
+```
+
+```bash
 node tests/contract.check.mjs
 ```
 
 - `claude plugin validate .` reads the manifests and the hooks module as Claude Code does.
 - `claude plugin test .` tests the hooks with a fake host. The tests replace the Haiku call with a fixed reply.
 - `tests/docs.check.mjs` checks the rules for the docs.
-- `tsc` checks the types of the hooks and the tests. See [Type check](#type-check).
+- `tsc` checks the types of the hooks and the tests (`tsconfig.json`), and of the scripts that read the trace
+  (`tsconfig.scripts.json`). See [Type check](#type-check).
 - `tests/contract.check.mjs` checks the contracts that the types cannot see. Each error says what to use instead.
 
 CI (`.github/workflows/test.yml`) runs the checks for each push to `main` and each pull request, but not `tsc`:
@@ -180,6 +185,13 @@ The plugin saves more when the listings are longer. Thus the result depends on t
 To check the types, load the plugin one time with `claude --plugin-dir .`. Claude Code then writes
 `.claude-plugin/types/`, which `tsconfig.json` uses. Git does not track this folder. Without it, `tsc` fails with
 TS2688.
+
+Also run `npm install` one time. It gets the Node types for `tsconfig.scripts.json`. Without them, `tsc` fails with
+TS2688. `tsconfig.json` does not use the Node types, because Claude Code runs the hooks without Node.
+
+`tsconfig.scripts.json` checks each script in `tests/` and `evals/` that starts with `// @ts-check`. The smoke test
+and the eval read the trace file with the type `TraceLine` of `types/index.d.ts`. If a script reads an event or a
+field that the trace does not have, `tsc` fails.
 
 CI does not run the type check. Claude Code writes the types only in a session that is logged in, and CI has no
 login. When you raise the pinned Claude Code version in `.github/workflows/test.yml`, load the plugin with that

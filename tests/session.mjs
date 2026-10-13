@@ -1,3 +1,4 @@
+// @ts-check
 // Runs one real headless Claude Code session with this plugin and the fake MCP
 // servers of tests/fake-server.mjs, for the smoke test and the /verify recipe.
 // Each prompt goes in after the result of the one before, so a second prompt
@@ -29,19 +30,39 @@ export const TRACKER = 'fake_tracker'
 export const WEATHER = 'fake_weather'
 const SERVERS = { [TRACKER]: 'tracker', [WEATHER]: 'weather' }
 const FAKE_SERVER = path.join(ROOT, 'tests', 'fake-server.mjs')
+/** @type {(server: string, name: string) => string} */
 export const tool = (server, name) => `mcp__${server}__${name}`
 
+/** @type {(file: string) => any[]} */
 export const readLines = file =>
   fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)) : []
 
+/** @typedef {(labels: string[]) => string | undefined} Pick */
+
 // Answers a permission ask of the session: it allows each tool, and answers
 // each question with the label that `pick` chooses from its option labels.
+/**
+ * @param {{ tool_name: string, input?: { questions?: { question: string, options?: { label: string }[] }[] } }} request
+ * @param {Pick} pick
+ */
 function allowTool({ tool_name: name, input = {} }, pick) {
   if (name !== 'AskUserQuestion') return { behavior: 'allow', updatedInput: input }
   const answers = Object.fromEntries((input.questions ?? []).map(q => [q.question, pick((q.options ?? []).map(o => o.label)) ?? '']))
   return { behavior: 'allow', updatedInput: { ...input, answers } }
 }
 
+/** @typedef {{ pluginConfigs?: { loadout?: { options?: Partial<import('../types').Options> } }, enabledPlugins?: Record<string, boolean> }} Settings */
+// The result message of one prompt, as stream-json gives it, and its wall time.
+/** @typedef {{ is_error: boolean, result?: string, total_cost_usd?: number, duration_api_ms?: number, wallMs: number }} Result */
+
+/**
+ * @param {{
+ *   prompts: string[], allow?: string[], settings?: Settings, model?: string, effort?: string, base?: string,
+ *   prefix: string, toolSearch?: boolean, timeoutMs?: number, budgetUsd?: number, plugin?: boolean,
+ *   serverModule?: string, setup?: (cwd: string) => void, isolate?: boolean, strictMcp?: boolean,
+ *   answer?: boolean, pick?: Pick, restricted?: boolean, disallow?: string[],
+ * }} options
+ */
 export async function runSession({
   prompts,
   allow = [],
@@ -74,6 +95,7 @@ export async function runSession({
   const cwd = path.join(dir, 'cwd')
   fs.mkdirSync(cwd)
   setup(cwd)
+  /** @type {(name: string) => string} */
   const file = name => path.join(dir, name)
   const sessionId = crypto.randomUUID()
 
@@ -106,7 +128,9 @@ export async function runSession({
   // servers, the automatic rule keeps them in the prompt.
   const env = { ...process.env, ENABLE_TOOL_SEARCH: toolSearch ? 'true' : 'false' }
 
+  /** @type {Result[]} */
   const results = []
+  /** @type {any[]} */
   const stream = []
   const out = fs.createWriteStream(file('out.jsonl'))
   const exit = await new Promise(resolve => {
@@ -116,11 +140,13 @@ export async function runSession({
     // gives the reason.
     child.stdin.on('error', () => {})
     const timer = setTimeout(() => child.kill(), timeoutMs)
+    /** @type {(msg: object) => void} */
     const send = msg => child.stdin.write(`${JSON.stringify(msg)}\n`)
     let sentAt = 0
-    const ask = text => {
+    /** @type {(n: number) => void} */
+    const ask = n => {
       sentAt = Date.now()
-      send({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } })
+      send({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompts[n] }] } })
     }
     readline.createInterface({ input: child.stdout }).on('line', line => {
       out.write(`${line}\n`)
@@ -141,7 +167,7 @@ export async function runSession({
       }
       if (msg.type !== 'result') return
       results.push({ ...msg, wallMs: Date.now() - sentAt })
-      if (results.length < prompts.length) ask(prompts[results.length])
+      if (results.length < prompts.length) ask(results.length)
       else child.stdin.end()
     })
     child.on('error', err => resolve(err.message))
@@ -152,7 +178,7 @@ export async function runSession({
     })
     // The control channel starts with a handshake.
     if (answer) send({ type: 'control_request', request_id: 'init', request: { subtype: 'initialize' } })
-    ask(prompts[0])
+    ask(0)
   })
 
   const projectDir = path.join(os.homedir(), '.claude', 'projects', fs.realpathSync(cwd).replace(/[^a-zA-Z0-9]/g, '-'))
@@ -168,6 +194,7 @@ export async function runSession({
     results,
     out: stream,
     rows: readLines(file('transcript.jsonl')),
+    /** @type {import('../types').TraceLine[]} */
     trace: readLines(file('trace.jsonl')),
     calls: readLines(file('calls.jsonl')),
   }

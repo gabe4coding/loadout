@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 // Measures what the plugin changes in cost, speed and quality. Each task of
 // evals/tasks.mjs runs as a real headless Claude Code session once per arm:
 //
@@ -27,6 +28,17 @@ import { readLines, runSession } from '../tests/session.mjs'
 import { setup } from './fixture.mjs'
 import { TASKS } from './tasks.mjs'
 
+/** @typedef {import('../types').TraceLine} TraceLine */
+/** @typedef {import('../types').Usage} Usage */
+/** @typedef {{ id: string, about?: string, prompts: string[], check: (input: { calls: any[], answers: string[], cwd: string }) => string[] | Promise<string[]> }} Task */
+/** @typedef {{ date: string, claude: string, model: string, effort: string, env: string, runs: number, arms: string[], tasks: string[] }} Meta */
+// One line of results.jsonl: a session that ran (`error` says if it ended
+// badly), or a session that threw, with only the fields that the progress line
+// and the report read.
+/** @typedef {Awaited<ReturnType<typeof runOne>>} Measured */
+/** @typedef {Measured | Pick<Measured, 'task' | 'arm' | 'run' | 'failed' | 'totalUsd' | 'wallMs'> & { error: string }} Outcome */
+/** @typedef {{ [K in keyof Measured]: Measured[K] extends number ? K : never }[keyof Measured]} NumberKey */
+
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 
 const USAGE = `usage:
@@ -39,6 +51,7 @@ const USAGE = `usage:
                 Policy settings of your organization still apply.
   --env real    also your own settings, plugins, skills and MCP servers.`
 
+/** @type {Record<string, Partial<import('../types').Options> | null>} */
 const ARMS = {
   baseline: null,
   loadout: {},
@@ -49,8 +62,10 @@ const ARMS = {
 
 // USD per million tokens of the classifier's model (Haiku 5.5), by the alias
 // that the plugin asks for.
+/** @type {Record<string, Usage>} */
 const CLASSIFIER_PRICES = { haiku: { input_tokens: 0.1, output_tokens: 0.5, cache_read_input_tokens: 0.01, cache_creation_input_tokens: 0.125 } }
 
+/** @type {(msg: string) => never} */
 const die = msg => {
   console.error(msg)
   process.exit(2)
@@ -76,7 +91,7 @@ try {
     },
   })
 } catch (err) {
-  die(`${err.message}\n${USAGE}`)
+  die(`${err instanceof Error ? err.message : err}\n${USAGE}`)
 }
 const flags = parsed.values
 if (flags.help) die(USAGE)
@@ -128,10 +143,12 @@ const installed = flags.env === 'real' ? installedLoadout() : []
 console.log('warm up: one session per arm')
 await Promise.all(arms.map(arm => runOne({ task: { id: 'warmup', prompts: ['Reply with the word ready.'], check: () => [] }, arm, run: 0 })))
 
+/** @type {Outcome[]} */
 const records = []
 await pool(plan, jobs, async job => {
   // A failed session is one error record, not the end of the run.
-  const record = await runOne(job).catch(err => ({ task: job.task.id, arm: job.arm, run: job.run, error: err.message, failed: [], efforts: [], route: null, totalUsd: 0, wallMs: 0 }))
+  /** @type {Outcome} */
+  const record = await runOne(job).catch(err => ({ task: job.task.id, arm: job.arm, run: job.run, error: err.message, failed: [], totalUsd: 0, wallMs: 0 }))
   records.push(record)
   fs.appendFileSync(path.join(out, 'results.jsonl'), `${JSON.stringify(record)}\n`)
   const verdict = record.error ? `ERROR ${record.error}` : record.failed.length === 0 ? 'pass' : `FAIL ${record.failed.join('; ')}`
@@ -140,6 +157,7 @@ await pool(plan, jobs, async job => {
 
 writeReport(out, meta, records)
 
+/** @param {{ task: Task, arm: string, run: number }} job */
 async function runOne({ task, arm, run }) {
   const options = ARMS[arm]
   const settings = {
@@ -167,16 +185,17 @@ async function runOne({ task, arm, run }) {
     budgetUsd: Number(flags.budget),
     timeoutMs: 600_000,
   })
-  const record = { task: task.id, arm, run, dir: session.dir, ...measure(session) }
+  const measured = measure(session)
   const cwd = path.join(session.dir, 'cwd')
-  record.error =
+  const error =
     session.exit !== 0 ? `exit ${session.exit}` : session.results.length < task.prompts.length ? `${session.results.length} of ${task.prompts.length} results` : null
-  record.failed = await task.check({ calls: session.calls, answers: record.answers, cwd })
-  if (!flags.keep && !record.error && record.failed.length === 0) fs.rmSync(session.dir, { recursive: true, force: true })
-  return record
+  const failed = await task.check({ calls: session.calls, answers: measured.answers, cwd })
+  if (!flags.keep && !error && failed.length === 0) fs.rmSync(session.dir, { recursive: true, force: true })
+  return { task: task.id, arm, run, dir: session.dir, ...measured, error, failed }
 }
 
 // What one session cost, how long it took, and what the plugin did.
+/** @param {Awaited<ReturnType<typeof runSession>>} session */
 function measure({ results, out, trace }) {
   // Each result of a session reports the cost of the session so far.
   const sessionUsd = Math.max(0, ...results.map(r => r.total_cost_usd ?? 0))
@@ -188,6 +207,7 @@ function measure({ results, out, trace }) {
   const requests = new Map()
   for (const m of main) requests.set(m.message.id, { model: m.message.model, ...m.message.usage })
   const list = [...requests.values()]
+  /** @type {(key: keyof Usage) => number} */
   const sum = key => list.reduce((s, u) => s + (u[key] ?? 0), 0)
   const first = list[0] ?? {}
   const toolUses = main.flatMap(m => m.message.content ?? []).filter(b => b.type === 'tool_use')
@@ -216,17 +236,19 @@ function measure({ results, out, trace }) {
     route: trace.find(t => t.event === 'model_route') ?? null,
     recalled: trace.filter(t => t.event === 'recall').flatMap(t => t.named),
     classifierCalls: classifier.length,
-    plugins: init?.plugins?.map(p => p.name) ?? [],
+    plugins: init?.plugins?.map((/** @type {{ name: string }} */ p) => p.name) ?? [],
     skills: init?.skills?.length ?? 0,
     mcpServers: init?.mcp_servers?.length ?? 0,
   }
 }
 
+/** @param {Extract<TraceLine, { event: 'classifier' }>} line */
 function usd({ model, usage }) {
   if (!usage) return 0
   const price = CLASSIFIER_PRICES[model]
   if (!price) throw new Error(`no price for the classifier model ${model}: add it to CLASSIFIER_PRICES`)
-  return Object.entries(price).reduce((s, [key, price]) => s + ((usage[key] ?? 0) * price) / 1e6, 0)
+  const prices = /** @type {[keyof Usage, number][]} */ (Object.entries(price))
+  return prices.reduce((s, [key, perMillion]) => s + ((usage[key] ?? 0) * perMillion) / 1e6, 0)
 }
 
 function installedLoadout() {
@@ -238,56 +260,78 @@ function installedLoadout() {
   }
 }
 
+/**
+ * @template T
+ * @param {T[]} items
+ * @param {number} size
+ * @param {(item: T) => Promise<void>} fn
+ */
 async function pool(items, size, fn) {
   const queue = [...items]
   await Promise.all(Array.from({ length: Math.min(size, queue.length) }, async () => {
-    while (queue.length > 0) await fn(queue.shift())
+    for (let item = queue.shift(); item !== undefined; item = queue.shift()) await fn(item)
   }))
 }
 
+/**
+ * @template T
+ * @param {T[]} list
+ */
 function shuffle(list) {
-  const a = [...list]
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1))
-    ;[a[i], a[j]] = [a[j], a[i]]
-  }
-  return a
+  const rest = [...list]
+  const out = []
+  while (rest.length > 0) out.push(...rest.splice(Math.floor(Math.random() * rest.length), 1))
+  return out
 }
 
 // ---- report ----
 
+/** @param {number[]} xs */
 function mean(xs) {
   return xs.length === 0 ? NaN : xs.reduce((s, x) => s + x, 0) / xs.length
 }
 
+/** @param {number} x */
 function pct(x) {
   return Number.isFinite(x) ? `${x >= 0 ? '+' : ''}${(x * 100).toFixed(0)}%` : 'n/a'
 }
 
 // The geometric mean over tasks of mean(arm) / mean(baseline): -20% means the
 // arm costs a fifth less on a typical task.
-function pairedChange(records, arm, key) {
+/**
+ * @param {Measured[]} done
+ * @param {string} arm
+ * @param {NumberKey} key
+ */
+function pairedChange(done, arm, key) {
   const ratios = []
-  for (const task of new Set(records.map(r => r.task))) {
-    const of = name => records.filter(r => r.task === task && r.arm === name && !r.error).map(r => r[key])
+  for (const task of new Set(done.map(r => r.task))) {
+    /** @type {(name: string) => number[]} */
+    const of = name => done.filter(r => r.task === task && r.arm === name).map(r => r[key])
     const [a, b] = [mean(of(arm)), mean(of('baseline'))]
     if (a > 0 && b > 0) ratios.push(Math.log(a / b))
   }
   return ratios.length === 0 ? NaN : Math.exp(mean(ratios)) - 1
 }
 
+/**
+ * @param {string} dir
+ * @param {Meta} meta
+ * @param {Outcome[]} records
+ */
 function writeReport(dir, meta, records) {
   const arms = meta.arms.filter(arm => records.some(r => r.arm === arm))
   const tasks = meta.tasks.filter(task => records.some(r => r.task === task))
   const hasBase = arms.includes('baseline')
-  const ok = r => !r.error
+  const ran = records.filter(r => 'dir' in r)
+  const done = ran.filter(r => !r.error)
   const lines = [
     '# loadout impact eval',
     '',
     `${meta.date} · ${meta.claude} · --model ${meta.model} --effort ${meta.effort} · env ${meta.env} · ${meta.runs} runs per task and arm`,
     '',
   ]
-  const sample = records.find(r => r.arm === 'baseline') ?? records[0]
+  const sample = done.find(r => r.arm === 'baseline') ?? done[0]
   if (sample) lines.push(`Session setup (baseline): ${sample.mcpServers} MCP servers, ${sample.skills} skills, plugins: ${sample.plugins.join(', ') || 'none'}.`, '')
 
   lines.push(
@@ -300,12 +344,14 @@ function writeReport(dir, meta, records) {
   )
   for (const arm of arms) {
     const all = records.filter(r => r.arm === arm)
-    const rs = all.filter(ok)
+    const rs = done.filter(r => r.arm === arm)
     const passed = rs.filter(r => r.failed.length === 0).length
+    /** @type {(key: NumberKey) => number} */
     const avg = key => mean(rs.map(r => r[key]))
     const cost = avg('totalUsd')
     const share = avg('classifierUsd') / cost
-    const vs = key => (arm === 'baseline' || !hasBase ? '' : pct(pairedChange(records, arm, key)))
+    /** @type {(key: NumberKey) => string} */
+    const vs = key => (arm === 'baseline' || !hasBase ? '' : pct(pairedChange(done, arm, key)))
     lines.push(
       `| ${arm} | ${all.length} | ${passed}/${rs.length} | $${cost.toFixed(4)} | ${vs('totalUsd')} | ${arm === 'baseline' ? '' : `${(share * 100).toFixed(1)}%`} | ${(avg('wallMs') / 1000).toFixed(1)}s | ${vs('wallMs')} | ${Math.round(avg('firstPromptTokens'))} | ${Math.round(avg('cacheWriteTokens'))} | ${Math.round(avg('outputTokens'))} | ${avg('searches').toFixed(1)} | ${all.length - rs.length} |`,
     )
@@ -314,14 +360,14 @@ function writeReport(dir, meta, records) {
   lines.push('', '## Per task', '', 'Each cell: checks passed / sessions, mean cost, mean time.', '', `| Task | What it tests | ${arms.join(' | ')} |`, `| --- | --- | ${arms.map(() => '---').join(' | ')} |`)
   for (const task of tasks) {
     const cells = arms.map(arm => {
-      const rs = records.filter(r => r.task === task && r.arm === arm && ok(r))
+      const rs = done.filter(r => r.task === task && r.arm === arm)
       if (rs.length === 0) return 'n/a'
       return `${rs.filter(r => r.failed.length === 0).length}/${rs.length} · $${mean(rs.map(r => r.totalUsd)).toFixed(4)} · ${(mean(rs.map(r => r.wallMs)) / 1000).toFixed(0)}s`
     })
     lines.push(`| ${task} | ${TASKS.find(one => one.id === task)?.about ?? ''} | ${cells.join(' | ')} |`)
   }
 
-  const switches = records.filter(r => r.efforts.length > 0 || r.route)
+  const switches = ran.filter(r => r.efforts.length > 0 || r.route)
   if (switches.length > 0) {
     lines.push('', '## Effort and model picks', '', '| Task | Arm | Run | Effort picks | Model | Models that answered |', '| --- | --- | --- | --- | --- | --- |')
     for (const r of switches) {
@@ -333,7 +379,7 @@ function writeReport(dir, meta, records) {
   const bad = records.filter(r => r.error || r.failed.length > 0)
   if (bad.length > 0) {
     lines.push('', '## Failed checks and errors', '')
-    for (const r of bad) lines.push(`- ${r.task} · ${r.arm} · run ${r.run}: ${r.error ?? r.failed.join('; ')} (${r.dir})`)
+    for (const r of bad) lines.push(`- ${r.task} · ${r.arm} · run ${r.run}: ${r.error ?? r.failed.join('; ')}${'dir' in r ? ` (${r.dir})` : ''}`)
   }
 
   const text = `${lines.join('\n')}\n`
