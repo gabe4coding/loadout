@@ -22,6 +22,11 @@ hard:
   - .github/scripts/general_review.py
   - .github/workflows/review.yml
   - .github/workflows/risk.yml
+  # Hosted reviewer config. A PR must not replace the reviewer the tier reads.
+  - greptile.json
+  - ".greptile/**"
+  - .coderabbit.yaml
+  - .coderabbit.yml
   - "**/publish*.yml"
   - "**/release*.yml"
   - "**/tag*.yml"
