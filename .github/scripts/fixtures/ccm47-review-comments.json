@@ -1,0 +1,74 @@
+[
+  {
+    "id": 4312996048,
+    "user": {
+      "login": "greptile-apps[bot]",
+      "type": "Bot"
+    },
+    "commit_id": "90f1fb98089860c577e53dfe3588868b852a74a3",
+    "created_at": "2026-10-19T10:55:57Z",
+    "updated_at": "2026-10-19T10:55:59Z",
+    "path": "hooks/paths.ts",
+    "body": "<a href=\"#\"><img alt=\"P1\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p1.svg?v=9\" align=\"top\"></a> **Parent paths bypass approval**"
+  },
+  {
+    "id": 4312996059,
+    "user": {
+      "login": "greptile-apps[bot]",
+      "type": "Bot"
+    },
+    "commit_id": "90f1fb98089860c577e53dfe3588868b852a74a3",
+    "created_at": "2026-10-19T10:55:57Z",
+    "updated_at": "2026-10-19T10:55:59Z",
+    "path": "hooks/paths.ts",
+    "body": "<a href=\"#\"><img alt=\"P1\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p1.svg?v=9\" align=\"top\"></a> **Character classes bypass approval**"
+  },
+  {
+    "id": 4312996067,
+    "user": {
+      "login": "greptile-apps[bot]",
+      "type": "Bot"
+    },
+    "commit_id": "90f1fb98089860c577e53dfe3588868b852a74a3",
+    "created_at": "2026-10-19T10:55:58Z",
+    "updated_at": "2026-10-19T10:55:59Z",
+    "path": "hooks/paths.ts",
+    "body": "<a href=\"#\"><img alt=\"P2\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p2.svg?v=9\" align=\"top\"></a> **Shell patterns crash the check**"
+  },
+  {
+    "id": 4313241737,
+    "user": {
+      "login": "greptile-apps[bot]",
+      "type": "Bot"
+    },
+    "commit_id": "5075dbc6918a73c32ed780236d3812bd007318f7",
+    "created_at": "2026-10-19T11:25:08Z",
+    "updated_at": "2026-10-19T11:25:10Z",
+    "path": "hooks/paths.ts",
+    "body": "<a href=\"#\"><img alt=\"P1\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p1.svg?v=9\" align=\"top\"></a> **Copy commands skip approval**"
+  },
+  {
+    "id": 4313241748,
+    "user": {
+      "login": "greptile-apps[bot]",
+      "type": "Bot"
+    },
+    "commit_id": "5075dbc6918a73c32ed780236d3812bd007318f7",
+    "created_at": "2026-10-19T11:25:08Z",
+    "updated_at": "2026-10-19T11:25:10Z",
+    "path": "hooks/paths.ts",
+    "body": "<a href=\"#\"><img alt=\"P1\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p1.svg?v=9\" align=\"top\"></a> **Brace spellings skip approval**"
+  },
+  {
+    "id": 4313241756,
+    "user": {
+      "login": "greptile-apps[bot]",
+      "type": "Bot"
+    },
+    "commit_id": "5075dbc6918a73c32ed780236d3812bd007318f7",
+    "created_at": "2026-10-19T11:25:08Z",
+    "updated_at": "2026-10-19T11:25:10Z",
+    "path": "hooks/paths.ts",
+    "body": "<a href=\"#\"><img alt=\"P1\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p1.svg?v=9\" align=\"top\"></a> **Relative deletions skip approval**"
+  }
+]

@@ -11,9 +11,11 @@
 # A consumer of the tier (auto-merge) must read the "risk tier" check of a pull_request_target run of
 # .github/workflows/risk.yml, never a label or a check from a `pull_request` run: a PR can forge those.
 #
-# Reviewer: the only signal is the "Greptile Review" check run on the current head SHA from the app
-# greptile-apps. A pass never lowers the tier. A failed, missing, pending or stale check raises T0 to T1.
-# Labels and comments are not read.
+# Reviewer: a pass needs all three on the current head, read with GET and github.token.
+# The "Greptile Review" check from greptile-apps must be a success. The latest issue comment from
+# greptile-apps[bot] must score at least 4/5 and name this commit. No P0 or P1 inline comment from
+# that bot on this commit. A pass never lowers the tier. Anything else raises one step, and stops
+# at T2-hard. Labels are not read. Comments from any other author are not read.
 name: risk
 
 on:
@@ -51,8 +53,11 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-      pull-requests: write   # the risk:* label
-      checks: write          # the "risk tier" check run
+      # Greptile is read with GET: checks, issue comments, and inline review comments.
+      # write on checks and pull-requests is only for posting the tier. write includes read.
+      checks: write
+      issues: read
+      pull-requests: write
     steps:
       # The base branch: this file, .github/risk.yml and the classifier as the base has them.
       # The stored credentials are safe here: no step runs a file of the PR.
@@ -69,25 +74,51 @@ jobs:
           git fetch --no-tags --quiet origin "+refs/pull/$PR/head:refs/remotes/pr/head"
           git cat-file -e "$HEAD_SHA^{commit}"
 
-      - name: Read the Greptile Review check
+      - name: Read the Greptile review
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           gh api --paginate --slurp "repos/$REPO/commits/$HEAD_SHA/check-runs" > "$RUNNER_TEMP/check-pages.json"
-          python3 -I - "$RUNNER_TEMP/check-pages.json" "$RUNNER_TEMP/checks.json" <<'PY'
+          gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" > "$RUNNER_TEMP/issue-pages.json"
+          gh api --paginate --slurp "repos/$REPO/pulls/$PR/comments" > "$RUNNER_TEMP/review-pages.json"
+          python3 -I - "$RUNNER_TEMP" <<'PY'
           import json, sys
-          pages = json.load(open(sys.argv[1], encoding="utf-8"))
-          runs = []
-          for page in pages:
-              for c in page.get("check_runs") or []:
-                  app = c.get("app") or {}
-                  runs.append({"name": c.get("name"), "status": c.get("status"),
-                               "conclusion": c.get("conclusion"), "head_sha": c.get("head_sha"),
-                               "app": {"slug": app.get("slug")}})
-          with open(sys.argv[2], "w", encoding="utf-8") as fh:
-              json.dump(runs, fh)
+          from pathlib import Path
+          root = Path(sys.argv[1])
+
+          def records(name):
+              pages = json.loads((root / name).read_text(encoding="utf-8"))
+              out = []
+              for page in pages if isinstance(pages, list) else [pages]:
+                  if isinstance(page, list):
+                      out.extend(page)
+                  elif isinstance(page, dict):
+                      out.extend(page.get("check_runs") or [])
+              return out
+
+          def user(raw):
+              raw = raw or {}
+              return {"login": raw.get("login"), "type": raw.get("type")}
+
+          checks = []
+          for c in records("check-pages.json"):
+              app = c.get("app") or {}
+              checks.append({"name": c.get("name"), "status": c.get("status"),
+                             "conclusion": c.get("conclusion"), "head_sha": c.get("head_sha"),
+                             "app": {"slug": app.get("slug")}})
+          issues = [{"id": c.get("id"), "user": user(c.get("user")), "body": c.get("body") or "",
+                     "created_at": c.get("created_at"), "updated_at": c.get("updated_at")}
+                    for c in records("issue-pages.json")]
+          reviews = [{"id": c.get("id"), "user": user(c.get("user")), "body": c.get("body") or "",
+                      "commit_id": c.get("commit_id"), "created_at": c.get("created_at"),
+                      "updated_at": c.get("updated_at")}
+                     for c in records("review-pages.json")]
+          for name, data in (("checks.json", checks), ("issue-comments.json", issues),
+                             ("review-comments.json", reviews)):
+              (root / name).write_text(json.dumps(data), encoding="utf-8")
           PY
 
       - name: Classify
@@ -106,6 +137,8 @@ jobs:
             --rules .github/risk.yml --base "$BASE_SHA" --head "$HEAD_SHA" \
             --title="$PR_TITLE" --branch="$PR_BRANCH" --body-file "$RUNNER_TEMP/body.txt" \
             --automerge="$AUTOMERGE" --checks-file "$RUNNER_TEMP/checks.json" \
+            --issue-comments-file "$RUNNER_TEMP/issue-comments.json" \
+            --review-comments-file "$RUNNER_TEMP/review-comments.json" \
             --note="Rules and classifier from the base branch ($GITHUB_SHA)." \
             --json "$RUNNER_TEMP/risk.json" --markdown "$RUNNER_TEMP/risk.md"
           python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); print("tier="+d["tier"]); print("label="+d["label"])' \
