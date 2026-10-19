@@ -1,0 +1,12 @@
+[
+  {
+    "id": 6265579780,
+    "user": {
+      "login": "greptile-apps[bot]",
+      "type": "Bot"
+    },
+    "created_at": "2026-10-19T10:55:54Z",
+    "updated_at": "2026-10-19T11:25:14Z",
+    "body": "<!-- greptile_summary -->\n\nConfidence Score: 0/5\n\n<!-- greptile_confidence_score:0 -->\n\n<sub>Reviews (2) \u00b7 Last reviewed commit: [\"Bash guard: close the spellings the revi...\"](https://github.com/gabe4coding/claude-code-mode/commit/5075dbc6918a73c32ed780236d3812bd007318f7) \u00b7 [Reviewed by Greptile](https://www.greptile.com/?utm_source=greptile_review&utm_medium=github&utm_campaign=review_public&utm_content=gabe4coding/claude-code-mode)</sub>\n"
+  }
+]
